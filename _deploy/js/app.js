@@ -3,8 +3,12 @@
     'modules/app-core.js',
     'modules/app-pending-orders.js',
     'modules/app-view-mode.js',
-    'modules/app-production-modal.js',
-    'modules/app-main.js'
+    'modules/app-production-modal-core.js',
+    'modules/app-production-modal-manage.js',
+    'modules/app-production-modal-tabs.js',
+    'modules/app-main-core.js',
+    'modules/app-main-gallery.js',
+    'modules/app-main-utilities.js'
   ];
 
   const basePath = (() => {
