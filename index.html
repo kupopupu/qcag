@@ -1,0 +1,2599 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QCAG Báo Giá</title>
+    <link rel="icon" href="./assets/logo-qcag-2.0.ico" type="image/x-icon">
+    <script>
+        // Backend base URL for SQL data. Override by setting localStorage key `qcag_api_base_url`.
+        try {
+            var stored = (localStorage && localStorage.getItem('qcag_api_base_url'));
+            try {
+                // If hosted on GCS public URL, ignore stale localStorage override.
+                if (location && String(location.hostname || '').indexOf('storage.googleapis.com') !== -1) {
+                    stored = null;
+                }
+            } catch (e0) {}
+            window.API_BASE_URL = window.API_BASE_URL || stored || 'https://qcag-backend-493469512136.asia-southeast1.run.app';
+            // Increase list size to show all quotations on main screen (long-term growth).
+            window.QCAG_QUOTATION_LIMIT = 5000;
+            // Fetch quotations in smaller pages to avoid oversized responses.
+            window.QCAG_QUOTATION_PAGE_SIZE = 100;
+            // When hosting UI via HTTP (e.g., local LAN server), default API to same origin.
+            // This makes multi-device testing work without manually setting localStorage.
+            try {
+                if (!stored && location && (location.protocol === 'http:' || location.protocol === 'https:')) {
+                    var h = String(location.hostname || '').toLowerCase();
+                    var isLocalHost = (h === 'localhost' || h === '127.0.0.1' || h === '::1');
+                    var isPrivateIp = /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h);
+                    var isLanLike = isLocalHost || isPrivateIp || h.endsWith('.local');
+                    if (isLanLike) {
+                        window.API_BASE_URL = location.origin;
+                    }
+                }
+            } catch (e2) {}
+        } catch (e) {
+            window.API_BASE_URL = window.API_BASE_URL || 'https://qcag-backend-493469512136.asia-southeast1.run.app';
+        }
+    </script>
+    <script src="./_sdk/element_sdk.js"></script>
+    <script src="./_sdk/data_sdk.js?v=20260124-1"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="./css/styles.css">
+    <link rel="stylesheet" href="./ui/loading/loading-overlay.css">
+
+    <style>
+        /* 🔧 Ensure Delete and "Báo huỷ" buttons share the same width while keeping current height */
+        
+        .action-fixed-width {
+            min-width: 40px;
+            /* narrower for icon-only buttons */
+            padding: 0 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        /* Page slide animations for manage order details modal */
+        
+        #manage-order-pages {
+            transition: transform 0.3s ease-in-out;
+        }
+        
+        .page-slide {
+            transition: transform 0.3s ease-in-out;
+        }
+        /* Manage Order Details - single-page presentation */
+        
+        #manage-order-details-modal .modal-content {
+            position: relative;
+        }
+        
+        #manage-order-pages {
+            display: flex;
+            gap: 0;
+            overflow-x: hidden;
+            /* hide neighbouring pages */
+            overflow-y: hidden;
+            scroll-behavior: smooth;
+            justify-content: flex-start;
+            /* keep pages in a row, viewport will be clipped */
+            align-items: stretch;
+            width: 794px;
+            /* viewport width equals a single page */
+            max-width: calc(100% - 48px);
+            margin: 0 auto;
+            /* center viewport within modal */
+            box-sizing: border-box;
+        }
+        
+        #manage-order-pages .manage-page {
+            flex: 0 0 794px;
+            width: 794px;
+            min-width: 794px;
+            margin: 0;
+            box-sizing: border-box;
+        }
+        /* Prev / Next buttons overlayed at the sides of the active page */
+        
+        #mod-prev,
+        #mod-next {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 60;
+            width: 40px;
+            height: 40px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e5e7eb;
+        }
+        /* Position buttons at the sides of the centered page (794px width) */
+        
+        #mod-prev {
+            left: calc(50% - 445px);
+        }
+        
+        #mod-next {
+            left: calc(50% + 405px);
+        }
+        
+        #mod-prev:hover,
+        #mod-next:hover {
+            background: #f3f4f6;
+        }
+    </style>
+
+
+</head>
+
+<body class="min-h-full bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+    <!-- Auth Overlay (Login / Register) -->
+    <div id="auth-overlay" class="fixed inset-0 z-[9999] flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+        <div class="w-full max-w-md">
+            <div class="bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden">
+                <div class="h-1 bg-blue-600"></div>
+                <div class="px-6 py-5">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+                            <i class="fa-solid fa-file-invoice"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="text-xl font-bold text-gray-800 leading-tight">Đăng nhập</h3>
+                            <p id="auth-subtitle" class="text-sm text-gray-500 mt-0.5">Vui lòng đăng nhập để sử dụng</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="px-6 pb-6">
+                    <!-- Login Form -->
+                    <form id="login-form" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" for="login-username">Tài khoản</label>
+                            <div class="relative">
+                                <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-user"></i></span>
+                                <input id="login-username" type="text" class="w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="SĐT 10 số hoặc adminqcag" autocomplete="username" />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" for="login-password">Mật khẩu</label>
+                            <div class="relative">
+                                <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-lock"></i></span>
+                                <input id="login-password" type="password" class="w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="Nhập mật khẩu" autocomplete="current-password" />
+                            </div>
+                        </div>
+                        <div id="auth-message" class="text-sm hidden rounded-lg border px-3 py-2"></div>
+                        <div class="flex items-center gap-2 pt-1">
+                            <button type="submit" id="login-submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-lg">Đăng nhập</button>
+                            <button type="button" id="open-register" class="flex-1 bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 font-semibold py-2.5 px-4 rounded-lg">Đăng ký</button>
+                        </div>
+                        <div class="text-xs text-gray-500 leading-relaxed">
+                            Tài khoản thường: mật khẩu mặc định <span class="font-semibold">123456</span> (cần admin duyệt)
+                        </div>
+                    </form>
+
+                    <!-- Register Form -->
+                    <form id="register-form" class="space-y-4 hidden">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" for="register-phone">Số điện thoại</label>
+                            <div class="relative">
+                                <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-phone"></i></span>
+                                <input id="register-phone" type="tel" class="w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="Nhập SĐT 10 số" />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" for="register-name">Tên</label>
+                            <div class="relative">
+                                <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-id-card"></i></span>
+                                <input id="register-name" type="text" class="w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="Nhập tên" />
+                            </div>
+                        </div>
+                        <div id="register-message" class="text-sm hidden rounded-lg border px-3 py-2"></div>
+                        <div class="flex items-center gap-2 pt-1">
+                            <button type="submit" id="register-submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-lg">Đăng ký</button>
+                            <button type="button" id="back-to-login" class="flex-1 bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 font-semibold py-2.5 px-4 rounded-lg">Quay lại</button>
+                        </div>
+                        <div class="text-xs text-gray-500 leading-relaxed">Tài khoản cần admin duyệt để sử dụng.</div>
+                    </form>
+                </div>
+            </div>
+            <div class="text-center text-xs text-gray-500 mt-4">QCAG • Quản lý báo giá</div>
+        </div>
+    </div>
+
+    <!-- Sidebar Menu -->
+    <div id="sidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-lg hidden flex flex-col">
+        <div class="flex items-center justify-center p-4 border-b border-gray-200">
+            <img src="./assets/qcag-logo.svg" alt="QCAG" class="h-20 w-auto object-contain">
+        </div>
+        <nav class="p-4">
+            <ul class="space-y-2">
+                <li><button id="tasks-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-6a2 2 0 012-2h2a2 2 0 012 2v6M7 21h10M9 7h6"/></svg><span>Nhiệm vụ</span> </button></li>
+                <li><button id="create-production-order" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+    </svg><span>Tạo đơn hàng SX</span> </button></li>
+                <li><button id="manage-production-orders" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+    </svg><span>Quản lý đơn hàng</span> </button></li>
+                <li><button id="qc-signage" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+       </svg><span>QC Bảng hiệu</span> </button></li>
+                <li><button id="quote-gallery-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2" ry="2" stroke-width="2"></rect><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"></circle><path d="M21 17l-5-5-4 4-3-3-4 4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><span>Hình báo giá</span> </button></li>
+                <li><button id="acceptance-image" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="3" y="7" width="18" height="12" rx="2" stroke="currentColor" stroke-width="2"/>
+            <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="2"/>
+            <rect x="8" y="3" width="8" height="4" rx="1" stroke="currentColor" stroke-width="2"/>
+            <!-- Offset white path for check, moved right 1px -->
+            <path d="M17 16 L20 19 L24 13" stroke="white" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- Main black check with fill, moved right 1px -->
+            <path d="M17 16 L20 19 L24 13 L22.8 12 L20 16 L18.2 14.2 Z" fill="black" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                 </svg><span>Hình Nghiệm Thu</span> </button></li>
+                     <li><button id="xinphep-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+        <i class="fa-solid fa-hands-praying text-black w-5 h-5 inline-flex items-center justify-center text-[18px]"></i><span>Xin Phép Quảng Cáo</span> </button></li>
+                     <li><button id="bangtinh-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h13v7H3z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 10l4 0v4"/><circle cx="7.5" cy="17.5" r="1.5"/><circle cx="18.5" cy="17.5" r="1.5"/></svg><span>Bảng tính vận chuyển</span> </button></li>
+                     <li><button id="dssale-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg><span>Danh Sách Sale</span> </button></li>
+                     <li><button id="statistic-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="13" width="4" height="8" rx="1"/><rect x="9.5" y="9" width="4" height="12" rx="1"/><rect x="16" y="5" width="4" height="16" rx="1"/></svg><span>Thống kê</span> </button></li>
+                <li><button id="manage-accounts-btn" class="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200 flex items-center space-x-3 hidden">
+       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A6 6 0 0112 15a6 6 0 016.879 2.804M12 12a4 4 0 100-8 4 4 0 000 8z"></path></svg><span>Quản lý tài khoản</span> </button></li>
+            </ul>
+        </nav>
+            <div class="mt-auto p-4 border-t border-gray-200 text-xs text-gray-500">Version 1.8.2 - 2026-02-04</div>
+        <!-- Modal Thống kê -->
+        <div id="statistic-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+            <div class="flex items-center justify-center min-h-full p-4">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-[95vw] min-h-[650px] max-h-[90vh] modal-content overflow-hidden flex flex-col">
+                    <div class="modal-header p-6 border-b border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-2xl font-bold text-gray-800">Thống kê & Báo cáo</h3>
+                            <button id="close-statistic-modal" class="text-gray-400 hover:text-gray-600 text-3xl leading-none">&times;</button>
+                        </div>
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="border-b border-gray-200 bg-gray-50 px-6 py-2">
+                        <div class="flex items-center bg-gray-100 rounded-lg p-1 text-sm inline-flex" role="tablist" aria-label="Statistics Tabs">
+                            <button data-stats-tab="sales" role="tab" class="px-3 py-1 rounded-md bg-white shadow text-gray-800" aria-selected="true">Theo Sale</button>
+                            <button data-stats-tab="status" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Theo Trạng thái</button>
+                            <button data-stats-tab="brand" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Theo Brand</button>
+                            <button data-stats-tab="price" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Theo Giá tiền</button>
+                            <button data-stats-tab="quotes" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Theo Báo giá</button>
+                        </div>
+                    </div>
+
+                    <!-- Tab Panels -->
+                    <div class="modal-body flex-1 overflow-y-auto p-6">
+                        <!-- Sales Panel -->
+                        <div data-stats-panel="sales" class="space-y-6">
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Bảng thống kê</h4>
+                                    <div id="stats-sales-table" class="max-h-[500px] overflow-y-auto border border-gray-200 rounded-lg"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Biểu đồ</h4>
+                                    <div class="bg-white border border-gray-200 rounded-lg p-4" style="height: 500px;">
+                                        <canvas id="stats-sales-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Status Panel -->
+                        <div data-stats-panel="status" class="space-y-6 hidden">
+                            <!-- Toggle Button -->
+                            <div class="mb-4">
+                                <div class="inline-flex items-center bg-gray-100 rounded-lg p-1 text-sm">
+                                    <button data-status-type="qcag" class="px-3 py-1 rounded-md bg-white shadow text-gray-800">
+                                        Trạng thái QCAG
+                                    </button>
+                                    <button data-status-type="spo" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">
+                                        Trạng thái SPO
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Bảng thống kê</h4>
+                                    <div id="stats-status-table" class="max-h-[500px] overflow-y-auto border border-gray-200 rounded-lg"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Biểu đồ</h4>
+                                    <div class="bg-white border border-gray-200 rounded-lg p-4" style="height: 500px;">
+                                        <canvas id="stats-status-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Brand Panel -->
+                        <div data-stats-panel="brand" class="space-y-6 hidden">
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Bảng thống kê</h4>
+                                    <div id="stats-brand-table"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Biểu đồ Top 10</h4>
+                                    <div class="bg-white border border-gray-200 rounded-lg p-4" style="height: 400px;">
+                                        <canvas id="stats-brand-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Price Panel -->
+                        <div data-stats-panel="price" class="space-y-6 hidden">
+                            <div id="stats-price-summary"></div>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Bảng phân bổ</h4>
+                                    <div id="stats-price-table"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Biểu đồ</h4>
+                                    <div class="bg-white border border-gray-200 rounded-lg p-4" style="height: 400px;">
+                                        <canvas id="stats-price-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quotes Panel -->
+                        <div data-stats-panel="quotes" class="space-y-6 hidden">
+                            <div id="stats-quotes-summary"></div>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Bảng theo tháng</h4>
+                                    <div id="stats-quotes-table"></div>
+                                </div>
+                                <div>
+                                    <h4 class="text-lg font-semibold text-gray-700 mb-4">Biểu đồ xu hướng</h4>
+                                    <div class="bg-white border border-gray-200 rounded-lg p-4" style="height: 400px;">
+                                        <canvas id="stats-quotes-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manage Accounts Modal -->
+    <div id="manage-accounts-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[900px] modal-content overflow-hidden">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xl font-bold text-gray-800">Quản lý tài khoản</h3>
+                        <button id="close-manage-accounts-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                    <div class="text-sm text-gray-500">Danh sách tài khoản đã đăng ký</div>
+                </div>
+                <div class="modal-body">
+                    <div class="overflow-auto">
+                        <table id="manage-accounts-table" class="w-full text-sm border-collapse">
+                            <thead>
+                                <tr class="text-left border-b">
+                                    <th class="p-2 w-12">STT</th>
+                                    <th class="p-2">Tên</th>
+                                    <th class="p-2">Tài khoản</th>
+                                    <th class="p-2">Trạng thái</th>
+                                    <th class="p-2">Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody id="manage-accounts-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="app-shell" class="max-w-[1700px] mx-auto ml-64 hidden">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-lg p-4 mb-6">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-4">
+                    <h1 id="app-title" class="text-3xl font-bold text-gray-800">Hệ Thống Quản Lý Báo Giá QCAG</h1>
+                </div>
+                <!-- Compact Upload Section -->
+                    <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2"><input type="file" id="excel-upload" accept=".xlsx,.xls,.csv" class="hidden" aria-label="Nhập dữ liệu SPO" title="Nhập dữ liệu SPO"> <button onclick="document.getElementById('excel-upload').click()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded shadow-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"> 📁 Nhập dữ liệu SPO </button>
+                    </div><button id="load-data-btn" class="hidden bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded text-sm"> Nạp Dữ Liệu </button> <button id="create-quote-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded shadow-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"> + Tạo Báo Giá </button>
+                    <button id="toggle-test-mode-btn" class="ml-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-3 rounded shadow-sm">TEST: OFF</button>
+
+
+                    <!-- Admin pending approvals button (only visible for adminqcag when there are pending users) -->
+                    <button id="admin-approvals-btn" class="hidden bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-semibold py-2 px-3 rounded text-sm" title="Duyệt tài khoản">
+                        Duyệt (<span id="admin-approvals-count">0</span>)
+                    </button>
+
+                    <!-- User dropdown (Logout / Change password) -->
+                    <div id="user-menu" class="relative hidden">
+                        <button id="user-menu-btn" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 font-semibold py-2 px-3 rounded text-sm inline-flex items-center gap-2">
+                            <span id="user-menu-label">Tài khoản</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div id="user-menu-dropdown" class="hidden absolute right-0 mt-2 w-44 bg-white border border-gray-200 rounded shadow-lg overflow-hidden z-50">
+                            <button id="menu-logout" class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Đăng Xuất</button>
+                            <button id="menu-change-password" class="hidden w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Đổi mật khẩu</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="offline-banner" class="hidden fixed top-4 right-4 z-[9998] bg-red-500 text-white px-4 py-2 rounded shadow">Chế độ TEST đang bật — các ghi chép sẽ không được gửi lên backend.</div>
+        <!-- Quotes List -->
+        <div class="bg-white rounded-lg shadow-lg p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-gray-800">Danh Sách Báo Giá</h2>
+                <div class="flex items-center space-x-4">
+                    <!-- View Mode Toggle -->
+                    <div class="flex items-center bg-gray-100 rounded-lg p-1 text-sm">
+                        <button id="view-list-btn" class="px-3 py-1 rounded-md bg-white shadow text-gray-800">Theo danh sách</button>
+                        <button id="view-outlet-btn" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Theo Outlet</button>
+                    </div>
+                    <div class="relative"><input type="text" id="search-input" placeholder="Tìm kiếm theo Outlet, Code, Khu vực..." class="w-80 px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+        </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="quotes-list" class="overflow-x-auto">
+                <p class="text-gray-500 text-center py-8">Chưa có báo giá nào</p>
+            </div>
+            <div id="pagination-container" class="mt-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between hidden">
+                <div id="pagination-info" class="text-sm text-gray-600"></div>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <button id="prev-page" class="px-3 py-1 border rounded bg-white hover:bg-gray-50 disabled:opacity-50" disabled>◀</button>
+                    <div class="flex items-center gap-2 px-3 py-1 border border-gray-300 rounded-lg bg-white shadow-sm">
+                        <input id="pagination-current-input" type="number" min="1" value="1" class="text-sm font-semibold text-gray-800" aria-label="Trang hiện tại" title="Trang hiện tại" />
+                        <span class="text-sm text-gray-500">/</span>
+                        <span id="pagination-total" class="text-sm font-semibold text-gray-700">1</span>
+                    </div>
+                    <button id="next-page" class="px-3 py-1 border rounded bg-white hover:bg-gray-50 disabled:opacity-50" disabled>▶</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Modal -->
+    <div id="quote-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full modal-content">
+                <div class="modal-header">
+                    <div class="flex flex-col gap-3 mb-4">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex flex-wrap items-center gap-4">
+                                <h3 class="text-2xl font-bold text-gray-800">Tạo Báo Giá Mới</h3>
+                                <div id="sale-info-bar" class="sale-info-bar flex flex-wrap items-center gap-2 bg-gray-100 border border-gray-200 rounded-full px-3 py-2 w-fit max-w-full ml-16">
+                                    <div class="sale-pill flex items-center justify-between gap-3 bg-white border border-gray-200 rounded-full px-4 h-10 flex-shrink-0 min-w-[230px]">
+                                        <button type="button" id="sale-type-toggle" class="relative inline-flex h-6 w-12 rounded-full bg-gray-300 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-400">
+                                      <span class="sr-only">Đổi chức vụ</span>
+                                      <span id="sale-type-knob" class="absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow transition-transform duration-200"></span>
+                                    </button>
+                                        <span id="sale-type-display" class="text-xs font-semibold text-blue-600 whitespace-nowrap text-center w-36">Sale (SR)</span>
+                                    </div>
+                                    <div class="sale-pill flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-10">
+                                        <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Mã Sale</span>
+                                        <input type="text" id="sale-code" form="quote-form" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 placeholder-gray-400 w-40" aria-label="Mã Sale" title="Mã Sale">
+                                    </div>
+                                    <div class="sale-pill flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-10">
+                                        <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tên Sale</span>
+                                        <input type="text" id="sale-name" form="quote-form" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 placeholder-gray-400 w-56" aria-label="Tên Sale" title="Tên Sale">
+                                    </div>
+                                    <div class="sale-pill flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-10">
+                                        <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">SĐT</span>
+                                        <input type="tel" id="sale-phone" form="quote-form" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 placeholder-gray-400 w-48" aria-label="SĐT Sale" title="SĐT Sale">
+                                    </div>
+                                    <div id="ss-pill" class="sale-pill ss-pill flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-10">
+                                        <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tên SS</span>
+                                        <input type="text" id="ss-name" form="quote-form" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 placeholder-gray-400 w-56" aria-label="Tên SS" title="Tên SS">
+                                    </div>
+                                </div>
+                            </div>
+                            <button id="close-modal" type="button" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <form id="quote-form">
+                        <!-- Customer Info - Compact -->
+                        <div class="space-y-2 mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
+                            <div class="flex items-center justify-between mb-2">
+                                <h4 class="text-sm font-semibold text-gray-800">Thông tin Outlet</h4>
+                            </div>
+                            <!-- Outlet Info -->
+                            <div class="flex flex-wrap gap-2">
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-[34px] flex-1 min-w-[200px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Outlet Code</span>
+                                    <input type="text" id="outlet-code" required class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1 min-w-[140px]" aria-label="Outlet Code" title="Outlet Code">
+                                    <button type="button" id="outlet-code-no-code-btn" class="text-[11px] font-semibold text-blue-600 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5 hover:bg-gray-200 whitespace-nowrap">Chưa có code</button>
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-[1.5] min-w-[240px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tên Outlet</span>
+                                    <input type="text" id="outlet-name" required class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Tên Outlet" title="Tên Outlet">
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-1 min-w-[200px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Số điện thoại</span>
+                                    <input type="tel" id="outlet-phone" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Số điện thoại Outlet" title="Số điện thoại Outlet">
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 min-w-[150px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Khu vực</span>
+                                    <select id="area" required class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 pr-6" aria-label="Khu vực" title="Khu vực">
+                            <option value="" disabled selected hidden>Chọn</option>
+                            <option value="S4">S4</option>
+                            <option value="S5">S5</option>
+                            <option value="S16">S16</option>
+                            <option value="S17">S17</option>
+                            <option value="S19">S19</option>
+                            <option value="S24">S24</option>
+                                    <option value="Modern On Trade 8">Modern On Trade 8</option>
+                          </select>
+                                </div>
+                            </div>
+                            <!-- Address Row -->
+                            <div class="flex flex-wrap gap-2">
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-1 min-w-[160px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Số nhà</span>
+                                    <input type="text" id="house-number" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Số nhà" title="Số nhà">
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-[1.5] min-w-[200px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tên đường</span>
+                                    <input type="text" id="street-name" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Tên đường" title="Tên đường">
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-1 min-w-[180px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Ấp/Khóm</span>
+                                    <input type="text" id="ward-hamlet" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Ấp/Khóm" title="Ấp/Khóm">
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-1 min-w-[180px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Xã/Phường</span>
+                                    <input type="text" id="commune-ward" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Xã/Phường" title="Xã/Phường">
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 h-8 flex-1 min-w-[160px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tỉnh/TP</span>
+                                    <input type="text" id="province-city" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1" aria-label="Tỉnh/TP" title="Tỉnh/TP">
+                                </div>
+                            </div>
+                            <!-- Address Display -->
+                            <div class="flex flex-wrap gap-2">
+                                <div class="flex items-center gap-3 bg-gray-100 border border-gray-200 rounded-2xl px-4 py-2 flex-[0.7] min-w-[260px]">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Địa chỉ đầy đủ</span>
+                                    <div id="full-address" class="text-sm text-gray-700 flex-1 leading-snug"></div>
+                                </div>
+                                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-full px-4 py-2 flex-[0.3] min-w-[220px] shadow-sm">
+                                    <span class="sale-label text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tên SPO</span>
+                                    <input type="text" id="spo-name" class="bg-transparent border-none focus:outline-none focus:ring-0 text-sm text-gray-800 flex-1 placeholder-gray-400" placeholder="Điền khi khác bảng hiệu" title="Chỉ điền nếu tên SPO khác tên trên bảng hiệu" aria-label="Tên Outlet trên SPO">
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Items -->
+                        <div class="mb-6">
+                            <div class="flex justify-between items-center mb-3">
+                                <h4 class="text-lg font-semibold text-gray-800">Hạng Mục: Số lượng <span id="items-count">0</span></h4>
+                            </div>
+                            <div class="items-scroll-container">
+                                <!-- Column headers for item fields -->
+                                <div class="items-header flex items-center gap-2 flex-wrap md:flex-nowrap px-2 pb-1 text-xs font-semibold text-gray-600">
+                                    <div class="w-8"></div>
+                                    <div class="w-24 text-center">Code</div>
+                                    <div class="flex-[1.5] min-w-[220px] text-left">Nội dung</div>
+                                    <div class="w-32 text-center">Brand</div>
+                                    <div class="w-24 text-center">Ngang</div>
+                                    <div class="w-24 text-center">Cao</div>
+                                    <div class="w-24 text-center">SL</div>
+                                    <div class="w-24 text-center">ĐVT</div>
+                                    <div class="w-28 text-center">Đơn giá</div>
+                                    <div class="w-32 text-center">Thành tiền</div>
+                                    <div class="w-20"></div>
+                                </div>
+                                <div id="items-container" class="space-y-3">
+                                    <!-- Items will be added here -->
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <button type="button" id="add-item-btn" class="w-full border-2 border-dashed border-blue-400 rounded-2xl py-2 text-blue-600 font-semibold text-sm flex items-center justify-center gap-2 bg-transparent hover:bg-blue-50">
+                                    <span class="text-base">＋</span>
+                                    <span>Thêm hạng mục</span>
+                                </button>
+                            </div>
+                            <datalist id="item-content-options">
+                              <option value="Bảng hiệu hộp đèn mica 2 mặt"></option>
+                              <option value="Bảng hiệu hộp đèn mica hút nổi"></option>
+                              <option value="Logo hộp đèn mica nổi led"></option>
+                              <option value="Bảng hiệu alu hộp đèn logo"></option>
+                              <option value="Hộp đèn siêu mỏng logo thương hiệu"></option>
+                            </datalist>
+                        </div>
+                        <!-- Images + Total -->
+                        <div class="mb-6 grid gap-4 md:grid-cols-2">
+                            <div class="bg-white border border-gray-200 rounded-2xl p-4 flex flex-col">
+                                <div class="flex justify-between items-center mb-3">
+                                    <h4 class="text-lg font-semibold text-gray-800">Hình Ảnh (Tuỳ chọn)</h4>
+                                    <div class="flex items-center gap-2">
+                                        <input type="file" id="quote-images-input" accept="image/*" multiple class="hidden" aria-label="Tải hình báo giá" title="Tải hình báo giá">
+                                        <button type="button" id="add-image-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-md text-sm">+ Thêm Hình</button>
+                                        <button type="button" id="clear-images-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-3 rounded-md text-sm hidden">Xóa Hết</button>
+                                    </div>
+                                </div>
+                                <div id="quote-image-stage" class="quote-dropzone">
+                                    <div id="quote-images-empty" class="flex flex-col items-center justify-center text-center gap-2">
+                                        <div class="w-16 h-16 border-2 border-dashed border-gray-300 rounded-full flex items-center justify-center text-4xl text-gray-400">+</div>
+                                        <p class="text-sm text-gray-500 leading-snug">Bấm "+ Thêm Hình" để tải ảnh<br>Hoặc kéo thả trực tiếp.</p>
+                                    </div>
+                                    <div id="quote-image-main" class="hidden absolute inset-0 flex items-center justify-center p-4 bg-white">
+                                        <img id="quote-main-image" class="w-full h-full object-contain" alt="">
+                                    </div>
+                                </div>
+                                <div id="quote-images-grid" class="image-preview-grid hidden mt-3"></div>
+                            </div>
+                            <div class="bg-gray-50 rounded-2xl p-4 flex flex-col min-h-[130px]">
+                                <div class="flex items-center justify-between mb-3">
+                                    <h4 class="text-lg font-semibold text-gray-800">Báo Giá Gần Nhất</h4>
+                                    <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">Outlet</span>
+                                </div>
+                                <div id="recent-quotes" class="space-y-2 mb-2">
+                                    <div class="text-sm text-gray-400 italic">Đang lấy dữ liệu...</div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Actions -->
+                        <div class="quote-modal-footer flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="flex items-center gap-3">
+                                <div>
+                                    <span class="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Tổng tiền</span>
+                                    <p class="text-xs text-gray-400">Tự động cập nhật</p>
+                                </div>
+                                <span id="total-amount" class="text-3xl font-bold text-blue-600 leading-tight">0 đ</span>
+                            </div>
+                            <div class="flex justify-end space-x-3 w-full sm:w-auto">
+                                <button type="button" id="cancel-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 px-6 rounded-md">Hủy</button>
+                                <button type="button" id="preview-quote-btn" class="bg-gray-100 hover:bg-blue-100 text-blue-700 font-semibold py-2 px-6 rounded-md border border-blue-300 flex items-center">Xem trước báo giá</button>
+                                <button type="submit" id="submit-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-md flex items-center"> <span id="submit-text">Xác Nhận</span>
+                                <div id="submit-spinner" class="loading-spinner ml-2 hidden"></div>
+                            </button>
+                            </div>
+                        </div>
+                </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <!-- Quote Preview Modal (moved outside quote modal to avoid parent being hidden) -->
+    <div id="quote-preview-modal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-center justify-center bg-black/30">
+        <div class="bg-white border border-gray-300 shadow-2xl rounded-lg flex flex-col items-center justify-center modal-content w-[1123px] max-w-[98vw] h-[794px] max-h-[92vh]">
+            <div class="relative w-full h-full flex flex-col overflow-auto">
+                <button id="close-preview-modal" type="button" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                <div id="quote-preview-content" class="p-10 pt-8 pb-6 w-full h-full"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Quote Images Gallery Modal (moved outside quote modal to avoid nesting) -->
+    <div id="quote-images-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[650px] max-h-[90vh] modal-content overflow-hidden relative">
+                <button id="close-quote-images-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                <div class="flex h-full">
+                    <div class="flex-1 flex flex-col">
+                        <div class="modal-header">
+                            <div class="mb-4">
+                                <h3 class="text-2xl font-bold text-gray-800">Thư viện hình báo giá</h3>
+                            </div>
+                        </div>
+                        <div class="modal-body flex-1 overflow-auto">
+                            <div id="quote-gallery-grid" class="quote-gallery-grid hidden"></div>
+                            <div id="quote-gallery-empty" class="text-gray-500 text-center py-8">Chưa có hình báo giá nào</div>
+                        </div>
+                    </div>
+                    <div class="w-64 border-l border-gray-200 p-4 pt-16 flex flex-col gap-4">
+                        <div class="relative">
+                            <input id="quote-images-search" type="text" placeholder="Tìm theo Mã báo giá, Outlet, Sale, SS, Khu vực, SPO, Outlet Code" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-gray-500">Từ ngày</label>
+                            <label class="text-xs text-gray-500" for="quote-images-from-date">Từ ngày</label>
+                            <input id="quote-images-from-date" type="date" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-gray-500" for="quote-images-to-date">Đến ngày</label>
+                            <input id="quote-images-to-date" type="date" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                        </div>
+                        <div id="quote-images-date-mode" class="inline-flex items-center rounded-md bg-gray-50 p-1" role="group" aria-label="Chế độ lọc ngày">
+                            <button id="quote-images-date-mode-created" class="px-3 py-1 text-sm font-semibold rounded-md border text-gray-800 bg-white" aria-pressed="true">Ngày tạo</button>
+                            <button id="quote-images-date-mode-updated" class="ml-2 px-3 py-1 text-sm font-semibold rounded-md border text-gray-500 bg-gray-100" aria-pressed="false">Ngày cập nhật</button>
+                        </div>
+                        <div id="quote-images-area-filters" class="mt-3">
+                            <div class="text-xs text-gray-500 mb-1">Lọc theo khu vực</div>
+                            <div id="quote-images-area-buttons" class="grid grid-cols-3 gap-2"></div>
+                        </div>
+                        <span id="quote-images-count" class="text-sm text-gray-500"></span>
+                        <div class="flex items-center justify-between gap-2">
+                            <button id="quote-gallery-prev-page" class="px-2 py-1 text-sm rounded border border-gray-300 text-gray-600 hover:bg-gray-100" type="button">‹</button>
+                            <span id="quote-gallery-page-info" class="text-xs text-gray-500">Trang 1/1 • 0 hình</span>
+                            <button id="quote-gallery-next-page" class="px-2 py-1 text-sm rounded border border-gray-300 text-gray-600 hover:bg-gray-100" type="button">›</button>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-gray-500">
+                            <label for="quote-gallery-page-size" class="whitespace-nowrap">Mỗi trang</label>
+                            <select id="quote-gallery-page-size" class="px-2 py-1 border border-gray-300 rounded text-sm">
+                                <option value="12">12</option>
+                                <option value="24" selected>24</option>
+                                <option value="36">36</option>
+                                <option value="48">48</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <div class="flex gap-2 w-full">
+                                <button id="quote-images-select-all-btn" class="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded">Chọn tất cả</button>
+                                <button type="button" id="quote-images-deselect-btn" class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-semibold px-4 py-2 rounded">Bỏ chọn</button>
+                            </div>
+                            <button id="quote-images-export-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded disabled:opacity-50 disabled:cursor-not-allowed">Xuất JPG</button>
+                            <button id="quote-images-export-pdf-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded disabled:opacity-50 disabled:cursor-not-allowed">Xuất PDF</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Xin Phép Quảng Cáo Modal -->
+    <div id="xinphep-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[650px] max-h-[90vh] modal-content overflow-hidden relative">
+                <button id="close-xinphep-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                <div class="flex h-full">
+                    <div class="flex-1 flex flex-col">
+                        <div class="modal-header">
+                            <div class="mb-4">
+                                <h3 class="text-2xl font-bold text-gray-800">Xin Phép Quảng Cáo</h3>
+                            </div>
+                            <div class="mb-3 flex items-center gap-2 text-sm">
+                                <div class="flex items-center bg-gray-100 rounded-lg p-1" role="tablist" aria-label="XinPhep Tabs">
+                                    <button data-xinphep-tab="chuaxp" role="tab" class="px-3 py-1 rounded-md bg-white shadow text-gray-800" aria-selected="true">Chưa xin phép</button>
+                                    <button data-xinphep-tab="list" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Danh sách Xin phép</button>
+                                    <button data-xinphep-tab="have" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Đã có giấy phép</button>
+                                </div>
+                                <input id="xinphep-header-search" type="search" placeholder="Tìm kiếm" class="flex-1 ml-2 px-3 py-1 border border-gray-300 rounded-md text-sm" aria-label="Tìm kiếm Xin Phép" />
+                            </div>
+                            <div id="xinphep-filter-buttons" class="flex items-center gap-2">
+                                <button data-xinphep-group="camau" class="xinphep-filter-btn px-3 py-1 rounded-md bg-white border border-gray-200 text-sm">Cà Mau</button>
+                                <button data-xinphep-group="cantho" class="xinphep-filter-btn px-3 py-1 rounded-md bg-white border border-gray-200 text-sm">TP. Cần Thơ</button>
+                                <button data-xinphep-group="angiang" class="xinphep-filter-btn px-3 py-1 rounded-md bg-white border border-gray-200 text-sm">An Giang</button>
+                            </div>
+                        </div>
+                        <div class="modal-body flex-1 overflow-auto">
+                            <div id="xinphep-list-container" class="p-4">
+                                <div id="xinphep-tab-panel-chuaxp">
+                                    <table id="xinphep-list-table" class="w-full text-sm border-collapse">
+                                        <thead>
+                                            <tr class="text-left border-b">
+                                                <th class="p-2">Mã BG</th>
+                                                <th class="p-2">Khu vực</th>
+                                                <th class="p-2">Brand</th>
+                                                <th class="p-2">Tên Outlet</th>
+                                                <th class="p-2">Địa chỉ</th>
+                                                <th class="p-2">Hạng mục</th>
+                                                <th class="p-2">Vị trí lắp đặt</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="xinphep-list-tbody"></tbody>
+                                    </table>
+                                </div>
+                                <div id="xinphep-tab-panel-list" class="hidden">
+                                    <!-- Danh sách Xin phép -->
+                                    <table class="w-full text-sm border-collapse">
+                                        <thead>
+                                            <tr class="text-left border-b">
+                                                <th class="p-2">STT</th>
+                                                <th class="p-2">Ngày đăng ký</th>
+                                                <th class="p-2">Tỉnh</th>
+                                                <th class="p-2">Số lượng điểm</th>
+                                                <th class="p-2">Số lượng bảng</th>
+                                                <th class="p-2">Thao tác</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="xinphep-selected-tbody"></tbody>
+                                    </table>
+                                </div>
+                                <!-- Modal to view grouped selection -->
+                                <div id="xinphep-selected-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+                                    <div class="flex items-center justify-center min-h-full p-4">
+                                        <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[300px] max-h-[80vh] modal-content relative flex flex-col">
+                                            <button id="close-xinphep-selected-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                                            <div class="p-6 border-b bg-white sticky top-0 z-20">
+                                                <div class="flex items-center gap-3">
+                                                    <h3 class="text-lg font-semibold">Danh sách đã chọn</h3>
+                                                    <input id="xinphep-selected-modal-search" type="search" placeholder="Tìm trong danh sách" class="flex-1 ml-4 px-3 py-1 border border-gray-300 rounded-md text-sm" aria-label="Tìm trong danh sách đã chọn" />
+                                                    <button id="xinphep-selected-modal-close-inline" type="button" class="ml-3 text-gray-500 hover:text-gray-700" title="Đóng">×</button>
+                                                </div>
+                                                <div class="mt-3">
+                                                    <table class="w-full text-sm border-collapse">
+                                                        <thead>
+                                                            <tr class="text-left">
+                                                                <th class="p-2">STT</th>
+                                                                <th class="p-2">Mã BG</th>
+                                                                <th class="p-2">Khu vực</th>
+                                                                <th class="p-2">Brand</th>
+                                                                <th class="p-2">Tên Outlet</th>
+                                                                <th class="p-2">Địa chỉ</th>
+                                                                <th class="p-2">Hạng mục</th>
+                                                                <th class="p-2">Vị trí lắp đặt</th>
+                                                            </tr>
+                                                        </thead>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                            <div class="p-6 overflow-auto flex-1">
+                                                <table class="w-full text-sm border-collapse">
+                                                    <tbody id="xinphep-selected-modal-tbody"></tbody>
+                                                </table>
+                                            </div>
+                                            <div id="xinphep-selected-modal-footer" class="p-4 border-t bg-white">
+                                                <div class="flex items-center">
+                                                    <div id="xinphep-selected-modal-footer-info" class="text-sm text-gray-700">Số Giấy Phép: - &nbsp;|&nbsp; Ngày có hiệu lực: - &nbsp;|&nbsp; Ngày hết hiệu lực: - &nbsp;|&nbsp; Số lượng điểm: 0 &nbsp;|&nbsp; Số lượng bảng: 0</div>
+                                                    <button id="xinphep-selected-modal-footer-close" class="ml-auto px-2 py-1 text-sm bg-gray-200 rounded">×</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="xinphep-tab-panel-have" class="hidden">
+                                    <!-- Đã có giấy phép -->
+                                    <table class="w-full text-sm border-collapse">
+                                        <thead>
+                                            <tr class="text-left border-b">
+                                                <th class="p-2">STT</th>
+                                                <th class="p-2">Số giấy phép</th>
+                                                <th class="p-2">Ngày có hiệu lực</th>
+                                                <th class="p-2">Ngày hết hiệu lực</th>
+                                                <th class="p-2">Tỉnh</th>
+                                                <th class="p-2">Số lượng điểm</th>
+                                                <th class="p-2">Số lượng bảng</th>
+                                                <th class="p-2">Thao tác</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="xinphep-have-tbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="modal-footer px-4 py-3 border-t bg-gray-50 flex justify-end">
+                            <button id="xinphep-select-all-btn" class="hidden mr-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded">Chọn tất cả</button>
+                            <button id="xinphep-deselect-btn" class="hidden mr-3 bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-semibold px-3 py-2 rounded">Bỏ chọn</button>
+                            <button id="xinphep-register-btn" class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded">Đăng Ký Xin Phép</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Bảng tính vận chuyển Modal -->
+    <div id="bangtinh-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[650px] max-h-[90vh] modal-content overflow-hidden relative">
+                <button id="close-bangtinh-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                <div class="flex h-full">
+                    <div class="flex-1 flex flex-col">
+                        <div class="modal-header">
+                            <div class="mb-4">
+                                <h3 class="text-2xl font-bold text-gray-800">Bảng tính vận chuyển</h3>
+                            </div>
+                        </div>
+                        <div class="modal-body flex-1 overflow-auto">
+                            <div class="text-center text-gray-500 py-20 text-lg">Nội dung Bảng tính vận chuyển sẽ hiển thị ở đây.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Danh Sách Sale Modal -->
+    <div id="dssale-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[650px] max-h-[90vh] modal-content overflow-hidden relative">
+                <button id="close-dssale-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                <div class="flex h-full">
+                    <div class="flex-1 flex flex-col">
+                        <div class="modal-header">
+                            <div class="mb-4">
+                                <h3 class="text-2xl font-bold text-gray-800">Danh Sách Sale</h3>
+                            </div>
+                        </div>
+                        <div class="modal-body flex-1 overflow-auto">
+                            <div class="text-center text-gray-500 py-20 text-lg">Nội dung Danh Sách Sale sẽ hiển thị ở đây.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- QC Signage Modal -->
+    <div id="qc-signage-modal" class="hidden fixed inset-0 z-50 modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="qc-signage-title">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[650px] max-h-[90vh] modal-content overflow-hidden">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 id="qc-signage-title" class="text-2xl font-bold text-gray-800">QC Bảng Hiệu</h3>
+                        <button id="close-qc-signage-modal" class="text-gray-400 hover:text-gray-600 text-2xl" aria-label="Đóng">×</button>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <div class="relative flex-1 min-w-[260px]">
+                            <input id="qc-search-input" type="text" placeholder="Tìm theo Mã đơn hàng, SPO, Outlet..." class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                            </div>
+                        </div>
+                        <div class="flex items-center bg-gray-100 rounded-lg p-1 text-sm" role="tablist" aria-label="QC Tabs">
+                            <button data-qc-tab="todo" role="tab" class="px-3 py-1 rounded-md bg-white shadow text-gray-800" aria-selected="true">Chưa QC <span class="qc-tab-count ml-1 text-xs text-gray-500">0</span></button>
+                            <button data-qc-tab="list" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Danh sách QC <span class="qc-tab-count ml-1 text-xs text-gray-500">0</span></button>
+                            <button data-qc-tab="waiting" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Chờ QC <span class="qc-tab-count ml-1 text-xs text-gray-500">0</span></button>
+                            <button data-qc-tab="pass" role="tab" class="px-3 py-1 rounded-md text-gray-600 hover:text-gray-800">Đạt QC <span class="qc-tab-count ml-1 text-xs text-gray-500">0</span></button>
+                        </div>
+                        <div id="qc-pass-filters" class="hidden w-full mt-2 flex items-center gap-2 justify-end">
+                            <label class="text-xs text-gray-500">Từ</label>
+                            <input id="qc-pass-from" type="date" class="px-2 py-1 border border-gray-300 rounded text-sm min-w-[140px]" aria-label="Từ ngày">
+                            <label class="text-xs text-gray-500">Đến</label>
+                            <input id="qc-pass-to" type="date" class="px-2 py-1 border border-gray-300 rounded text-sm min-w-[140px]" aria-label="Đến ngày">
+                            <button id="qc-pass-clear" class="px-3 py-1 bg-white border border-gray-300 rounded text-sm">Hủy lọc</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <div id="qc-tab-panel-todo" class="space-y-3"></div>
+                    <div id="qc-tab-panel-list" class="space-y-3 hidden"></div>
+                    <div id="qc-tab-panel-waiting" class="space-y-3 hidden"></div>
+                    <div id="qc-tab-panel-pass" class="space-y-3 hidden"></div>
+                </div>
+                <div class="qc-modal-footer sticky bottom-0 bg-white border-t border-gray-200 px-6 py-3 z-10 flex items-center justify-between gap-4">
+                    <span id="qc-selection-count" class="text-sm">Chưa chọn hạng mục nào</span>
+                    <div id="qc-pagination" class="flex items-center gap-2 min-w-[320px] justify-center">
+                        <button type="button" id="qc-page-prev" class="w-8 h-8 rounded border border-gray-300 text-gray-700 hover:bg-gray-50" aria-label="Trang trước">‹</button>
+                        <span id="qc-page-info" class="text-xs text-gray-600 whitespace-nowrap">Trang 1 / 1 (0)</span>
+                        <button type="button" id="qc-page-next" class="w-8 h-8 rounded border border-gray-300 text-gray-700 hover:bg-gray-50" aria-label="Trang sau">›</button>
+                        <div class="flex items-center gap-2 ml-2">
+                            <span class="text-xs text-gray-500">Hiển thị</span>
+                            <select id="qc-page-size" class="border border-gray-300 rounded px-2 py-1 text-xs" title="Số mục hiển thị mỗi trang" aria-label="Số mục hiển thị mỗi trang">
+                                <option value="10">10</option>
+                                <option value="15" selected>15</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex gap-3">
+                        <button type="button" id="qc-unselect-btn" class="px-5 py-2 bg-gray-300 hover:bg-gray-400 text-gray-800 rounded font-semibold" aria-label="Bỏ chọn">Bỏ chọn</button>
+                        <button type="button" id="qc-select-all-btn" class="px-5 py-2 bg-white border border-gray-300 hover:bg-gray-50 rounded font-semibold hidden" aria-label="Chọn tất cả">Chọn tất cả</button>
+                        <button type="button" id="qc-register-btn" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold" aria-label="Thêm vào Danh sách QC">Thêm vào Danh sách</button>
+                        <button type="button" id="qc-list-register-btn" class="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-semibold hidden" aria-label="Đăng ký QC từ Danh sách">Đăng ký QC</button>
+                        <button type="button" id="qc-export-btn" class="px-5 py-2 bg-white border border-gray-300 hover:bg-gray-50 rounded font-semibold hidden" aria-label="Xuất Excel">Xuất Excel</button>
+                    </div>
+                    <button type="button" id="qc-pass-all-btn" class="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-semibold hidden" aria-label="Pass tất cả">Pass tất cả</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- QC Reason Modal -->
+    <div id="qc-reason-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-md modal-content max-h-[280px]">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xl font-bold text-gray-800" id="qc-reason-title">Lý do</h3>
+                        <button id="qc-reason-close" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <label class="block text-sm font-medium text-gray-700 mb-1" for="qc-reason-input">Nhập lý do</label>
+                    <textarea id="qc-reason-input" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="Ghi rõ lý do..."></textarea>
+                </div>
+                <div class="modal-footer flex justify-end gap-2 p-3 pt-0">
+                    <button id="qc-reason-cancel" class="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 text-gray-700">Hủy</button>
+                    <button id="qc-reason-submit" class="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white">Xác nhận</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- QC Reason View Modal -->
+    <div id="qc-reason-view-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-md modal-content max-h-[280px]">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 id="qc-reason-view-title" class="text-xl font-bold text-gray-800">Lý do</h3>
+                        <button id="qc-reason-view-close" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                </div>
+                <div class="modal-body" id="qc-reason-view-content">
+                </div>
+                <div class="modal-footer flex justify-end gap-2 p-3 pt-0">
+                    <button id="qc-reason-view-ok" class="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white">Đóng</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- QC Return Confirm Modal -->
+    <div id="qc-return-confirm-modal" class="hidden fixed inset-0 z-50 modal-backdrop" tabindex="0">
+        <div class="flex items-center justify-center min-h-full p-1">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-md modal-content max-h-[160px]">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-base font-medium text-gray-800" id="qc-return-confirm-title">Xác nhận</h3>
+                        <button id="qc-return-confirm-close" class="text-gray-400 hover:text-gray-600 text-xl">×</button>
+                    </div>
+                </div>
+                <div class="px-3 py-1">
+                    <div id="qc-return-confirm-content" class="text-sm text-gray-700">Bạn có chắc chắn trả <span class="font-semibold" id="qc-return-outlet-name">-</span> về chờ QC không?</div>
+                </div>
+                <div class="modal-footer flex justify-end gap-2 p-1">
+                    <button id="qc-return-cancel" class="px-6 py-2 text-base rounded bg-gray-200 hover:bg-gray-300 text-gray-700 min-w-[120px]">Hủy</button>
+                    <button id="qc-return-confirm" class="px-6 py-2 text-base rounded bg-blue-600 hover:bg-blue-700 text-white min-w-[120px]">Xác nhận</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Production Order Modal -->
+    <div id="production-order-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[90vw] min-w-[1200px] modal-content">
+                <div class="modal-header">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-2xl font-bold text-gray-800">Tạo Đơn Hàng Sản Xuất</h3><button id="close-production-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                    <!-- Tab buttons -->
+                    <div class="flex gap-2 mb-4 border-b border-gray-200">
+                        <button id="production-tab-select" class="production-tab-btn px-4 py-2 font-medium text-blue-600 border-b-2 border-blue-600" data-tab="select">Chọn Báo Giá</button>
+                        <button id="production-tab-pending" class="production-tab-btn px-4 py-2 font-medium text-gray-500 hover:text-gray-700" data-tab="pending">Chờ Duyệt Tạo Đơn (<span id="pending-count">0</span>)</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <!-- TAB 1: Chọn Báo Giá -->
+                    <div id="production-tab-content-select" class="production-tab-content">
+                    <!-- NEW COMPACT LAYOUT -->
+                    <div class="mb-3 flex flex-wrap items-center gap-2">
+                        <div class="flex gap-2 items-center border border-gray-300 rounded-lg p-1 bg-gray-50">
+                            <span class="text-xs text-gray-500 mr-1">Trạng thái:</span>
+                            <button id="filter-approved" class="toggle-filter !py-1 !px-3 text-xs border border-gray-300 rounded">SPO được duyệt</button>
+                            <button id="filter-unapproved" class="toggle-filter !py-1 !px-3 text-xs border border-gray-300 rounded">SPO chưa duyệt</button>
+                            <div class="flex items-center gap-1 ml-1 border-l border-gray-300 pl-2">
+                                <span class="text-xs text-gray-500 mr-1">Khu vực:</span>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="S4">S4</button>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="S5">S5</button>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="S16">S16</button>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="S17">S17</button>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="S19">S19</button>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="S24">S24</button>
+                                <button class="area-filter !py-1 !px-2 text-xs border border-gray-300 rounded" data-area="Modern On Trade 8">Modern On Trade 8</button>
+                            </div>
+                            <button id="clear-filters" class="!py-1 !px-3 text-xs text-red-600 border border-gray-300 rounded">Huỷ lọc</button>
+                            <button class="filter-btn !py-1 !px-3 text-xs border border-gray-300 rounded" data-filter="selected">Đã chọn (<span id="selected-count">0</span>)</button>
+                        </div>
+                        <div class="relative ml-auto w-64">
+                            <input type="text" id="production-search" placeholder="Tìm theo Outlet, Sale, SS, SPO..." class="w-full pl-8 pr-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
+                                <svg class="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="h-[60vh]">
+                        <!-- LEFT LIST only -->
+                        <div class="flex-1 min-w-0 min-h-[58vh] max-h-[58vh] flex flex-col">
+                            <div class="text-[11px] font-semibold flex px-2 py-2 bg-gray-100 border border-gray-200 rounded-t select-none">
+                                <div class="w-6"></div>
+                                <div class="w-20">STT</div>
+                                <div class="w-20">Mã BG</div>
+                                <div class="w-20">Khu Vực</div>
+                                <div class="w-24 text-center">SPO</div>
+                                <div class="w-24 ml-3">Outlet Code</div>
+                                <div class="w-72 min-w-0">Tên Outlet</div>
+                                <div class="w-36">Tên Sale</div>
+                                <div class="w-20 text-center">Số Tiền</div>
+                                <div class="w-52 pl-2">Trạng Thái</div>
+                            </div>
+                            <div id="production-quotes-list" class="flex-1 overflow-y-auto border-x border-b border-gray-200 rounded-b bg-white">
+                                <!-- list injected here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex-grow"></div>
+                    <div class="mt-0 flex justify-end gap-2 border-t pt-3 sticky bottom-0 bg-white z-10">
+                        <button id="production-select-all-btn" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-800 font-medium py-2 px-4 rounded">Chọn tất cả</button>
+                        <button id="cancel-production" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-5 rounded">Hủy</button>
+                        <button id="create-production-list" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-5 rounded disabled:opacity-50 disabled:cursor-not-allowed" disabled>Thêm Vào Chờ Duyệt</button>
+                    </div>
+                    </div>
+                    <!-- END TAB 1 -->
+
+                    <!-- TAB 2: Chờ Duyệt Tạo Đơn -->
+                    <div id="production-tab-content-pending" class="production-tab-content hidden">
+                        <div class="mb-3 flex flex-wrap items-center gap-2">
+                            <div class="text-sm text-gray-600">
+                                Tổng số điểm thi công: <span id="pending-total-points" class="font-bold text-blue-600">0</span> |
+                                Tổng giá trị: <span id="pending-total-amount" class="font-bold text-green-600">0 đ</span>
+                            </div>
+                            <div class="relative ml-auto w-64">
+                                <input type="text" id="pending-search" placeholder="Tìm đơn theo người tạo..." class="w-full pl-8 pr-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
+                                    <svg class="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="h-[60vh]">
+                            <div class="flex-1 min-w-0 min-h-[58vh] max-h-[58vh] flex flex-col">
+                                <!-- Header -->
+                                <div class="text-xs font-semibold flex px-3 py-2 bg-gray-100 border border-gray-200 rounded-t select-none">
+                                    <div class="w-16">STT</div>
+                                    <div class="w-28">Số Điểm</div>
+                                    <div class="w-32">Tổng Tiền</div>
+                                    <div class="w-48">Khu Vực</div>
+                                    <div class="w-32">Người Tạo</div>
+                                    <div class="w-44">Ngày Giờ Tạo</div>
+                                    <div class="flex-1 text-center">Thao Tác</div>
+                                </div>
+                                <div id="pending-quotes-list" class="flex-1 overflow-y-auto border-x border-b border-gray-200 rounded-b bg-white">
+                                    <div class="p-8 text-center text-gray-500">Chưa có đơn chờ duyệt nào</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex-grow"></div>
+                        <div class="mt-0 flex justify-between gap-2 border-t pt-3 sticky bottom-0 bg-white z-10">
+                            <button id="pending-clear-all" class="bg-red-100 hover:bg-red-200 text-red-700 font-medium py-2 px-4 rounded">Xóa Tất Cả</button>
+                            <div class="flex gap-2">
+                                <button id="pending-back-to-select" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-5 rounded">← Quay lại chọn thêm</button>
+                                <button id="pending-save-order" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-5 rounded disabled:opacity-50 disabled:cursor-not-allowed" disabled>Lưu Đơn Hàng Sản Xuất</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- END TAB 2 -->
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Pending Order Detail Modal -->
+    <div id="pending-order-detail-modal" class="hidden fixed inset-0 z-[60] modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[85vw] min-w-[1000px] modal-content">
+                <div class="modal-header p-4 border-b">
+                    <div class="flex justify-between items-center">
+                        <div id="pending-order-detail-header" class="flex-1">
+                            <!-- Header content injected by JS -->
+                        </div>
+                        <button id="close-pending-order-detail-modal" class="text-gray-400 hover:text-gray-600 text-2xl ml-4">×</button>
+                    </div>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3 flex justify-between items-center">
+                        <button id="pending-detail-add-more" class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded">+ Chọn thêm báo giá</button>
+                    </div>
+                    <div class="h-[60vh]">
+                        <div class="flex-1 min-w-0 min-h-[58vh] max-h-[58vh] flex flex-col">
+                            <div class="text-[11px] font-semibold flex px-2 py-2 bg-gray-100 border border-gray-200 rounded-t select-none">
+                                <div class="w-16">STT</div>
+                                <div class="w-24">Mã BG</div>
+                                <div class="w-20">Khu Vực</div>
+                                <div class="w-28 text-center">SPO</div>
+                                <div class="w-28">Outlet Code</div>
+                                <div class="w-72 min-w-0">Tên Outlet</div>
+                                <div class="w-36">Tên Sale</div>
+                                <div class="w-24 text-right">Số Tiền</div>
+                                <div class="w-20 text-center">Xóa</div>
+                            </div>
+                            <div id="pending-order-detail-list" class="flex-1 overflow-y-auto border-x border-b border-gray-200 rounded-b bg-white">
+                                <!-- Detail list injected by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer p-4 border-t flex justify-end gap-2">
+                    <button id="pending-detail-close" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-5 rounded">Đóng</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Acceptance Image (Hình nghiệm thu) Modal -->
+    <div id="acceptance-image-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[82vw] min-w-[640px] sm:min-w-[720px] md:min-w-[900px] min-h-[650px] max-h-[90vh] modal-content overflow-hidden relative">
+                <button id="close-acceptance-image-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl z-10">×</button>
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-4 px-5 py-3">
+                        <h3 class="text-2xl font-bold text-gray-800">Hình Nghiệm Thu</h3>
+                    </div>
+                    <div class="flex items-center justify-between px-5 pb-3 gap-4">
+                        <div class="flex gap-2">
+                            <button class="acceptance-filter-btn px-3 py-1 rounded text-sm font-medium transition" data-filter="all">Tất cả</button>
+                            <button class="acceptance-filter-btn px-3 py-1 rounded text-sm font-medium transition" data-filter="normal">Đang thi công</button>
+                            <button class="acceptance-filter-btn px-3 py-1 rounded text-sm font-medium transition" data-filter="overdue">Trễ hạn</button>
+                            <button class="acceptance-filter-btn px-3 py-1 rounded text-sm font-medium transition" data-filter="full">Hoàn thành</button>
+                        </div>
+                        <input type="text" id="acceptance-search-input" placeholder="Tìm mã BG, Số ĐH, Khu Vực, Tên Outlet, SPO..." class="flex-1 px-3 py-1 border border-gray-300 rounded text-sm">
+                        <div class="flex items-center gap-2 ml-3">
+                            <label for="acceptance-page-size" class="text-sm text-gray-600">Hiển thị</label>
+                            <select id="acceptance-page-size" class="px-2 py-1 border border-gray-300 rounded text-sm bg-white">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                            <div class="flex items-center gap-2 ml-3">
+                                <button id="acceptance-prev-btn" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm">◀</button>
+                                <div id="acceptance-page-info" class="text-sm text-gray-600">1 / 1</div>
+                                <button id="acceptance-next-btn" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm">▶</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-body px-5 pb-6">
+                    <div class="flex w-full h-full gap-4 min-h-[400px]">
+                        <!-- Cột trái: Ảnh nghiệm thu -->
+                        <div class="flex-1 min-w-0 w-[75%] max-w-[75%] overflow-auto">
+                            <div id="acceptance-images-grid" class="grid grid-cols-5 gap-4">
+                                <!-- Thumbnails rendered here. When none exist, show '+' placeholders. -->
+                            </div>
+                        </div>
+                        <!-- Cột phải: Danh sách đơn hàng sản xuất -->
+                        <div class="border-l border-gray-200 pl-4 pr-1 flex flex-col w-[25%] min-w-[200px] max-w-[400px] h-full overflow-auto">
+                            <div class="font-semibold text-gray-700 mb-2 text-base flex-shrink-0">Đơn hàng sản xuất</div>
+                            <div id="acceptance-production-orders-list" class="flex-1 flex flex-col gap-2 overflow-y-auto pr-1"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Acceptance Detail Modal (3-column) -->
+    <div id="acceptance-detail-modal" class="hidden fixed inset-0 z-60 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full modal-content max-h-[90vh] overflow-hidden acceptance-detail-modal-content">
+                <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+                    <h3 class="text-xl font-semibold">Chi tiết nghiệm thu</h3>
+                    <button id="close-acceptance-detail-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                </div>
+                <div class="flex h-[78vh]">
+                    <div class="w-1/6 border-r border-gray-100 p-3 overflow-auto" id="acceptance-detail-col-left">
+                        <!-- small thumbnails list -->
+                    </div>
+                    <div class="flex-1 p-4 flex flex-col items-center justify-center" id="acceptance-detail-col-center">
+                        <!-- large preview or + placeholder -->
+                        <div id="acceptance-detail-preview" class="w-full h-full flex items-center justify-center">
+                        </div>
+                    </div>
+                    <div class="w-1/4 border-l border-gray-100 p-4 overflow-auto" id="acceptance-detail-col-right">
+                        <!-- quote info -->
+                    </div>
+                </div>
+                <input type="file" id="acceptance-detail-file-input" accept="image/*" class="hidden" multiple aria-label="Tải hình nghiệm thu" title="Tải hình nghiệm thu">
+            </div>
+        </div>
+    </div>
+    <!-- Production List Modal -->
+    <div id="production-list-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-7xl modal-content">
+                <div class="modal-header">
+                    <div class="flex justify-between items-center mb-6">
+                        <div class="flex items-center gap-4">
+                            <button id="back-to-selection" class="flex items-center gap-1 text-sm px-3 py-2 rounded border border-gray-300 hover:bg-gray-100 text-gray-700" title="Quay lại chọn điểm">
+                            ← Quay Lại
+                          </button>
+                            <h3 class="text-2xl font-bold text-gray-800">Danh Sách Sản Xuất</h3>
+                        </div>
+                        <div class="flex items-center space-x-3"><button id="save-to-management" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"> 💾 Lưu vào Quản lý </button><button id="export-production-list-excel" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg"> ⬇ Xuất Excel </button> <button id="close-production-list-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <div id="production-list-content" class="space-y-6">
+                        <!-- Production list will be generated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Manage Production Orders Modal -->
+    <div id="manage-production-orders-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[90vw] min-w-[1200px] modal-content">
+                <div class="modal-header">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-2xl font-bold text-gray-800">Quản Lý Đơn Hàng Sản Xuất</h3><button id="close-manage-production-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <!-- Search Section -->
+                    <div class="mb-6 p-4 bg-gray-50 rounded-lg">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-lg font-semibold text-gray-800">Danh Sách Đơn Hàng</h4>
+                            <div class="flex items-center space-x-4">
+                                                                <div class="relative"><input type="text" id="manage-search" placeholder="Tìm kiếm đơn hàng..." class="w-80 px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                        <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+           </svg>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Production Orders List -->
+                    <div id="production-orders-list" class="overflow-x-auto">
+                        <p class="text-gray-500 text-center py-8">Chưa có đơn hàng sản xuất nào</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Saved Production Order Details Modal -->
+    <div id="saved-production-order-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-7xl modal-content">
+                <div class="modal-header">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 id="saved-order-title" class="text-2xl font-bold text-gray-800">Đơn Hàng Sản Xuất</h3>
+                        <button id="close-saved-order-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <div id="saved-order-content" class="space-y-6"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Quote Notes Modal -->
+    <div id="quote-notes-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full modal-content">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-2">
+                        <div>
+                            <h3 class="text-2xl font-bold text-gray-800">Ghi chú báo giá</h3>
+                            <p id="note-modal-subtitle" class="text-sm text-gray-500 mt-1"></p>
+                        </div>
+                        <button id="close-note-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <div class="note-modal-layout">
+                        <div id="note-history" class="note-history"></div>
+                        <div class="note-compose">
+                            <div id="note-pending-files" class="pending-files"></div>
+                            <form id="note-compose-form" class="note-compose-form">
+                                <textarea id="note-message-input" placeholder="Nhập ghi chú..." rows="3"></textarea>
+                                <div class="note-compose-actions">
+                                    <input type="file" id="note-image-input" class="hidden" accept="image/*" multiple aria-label="Đính kèm ảnh" title="Đính kèm ảnh">
+                                    <input type="file" id="note-file-input" class="hidden" multiple aria-label="Đính kèm tệp" title="Đính kèm tệp">
+                                    <div class="flex w-full gap-2">
+                                        <button type="button" id="note-attach-image-btn" class="note-attach-btn note-attach-image-btn flex-1 basis-1/2" aria-label="Thêm ảnh">
+                          <span class="note-btn-icon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M4 7a2 2 0 012-2h2l1-1h6l1 1h2a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V7z" />
+                              <circle cx="12" cy="13" r="3" />
+                            </svg>
+                          </span>
+                          <span class="sr-only">Thêm ảnh</span>
+                        </button>
+                                        <button type="button" id="note-attach-file-btn" class="note-attach-btn note-attach-file-btn flex-1 basis-1/2" aria-label="Thêm tệp">
+                          <span class="note-btn-icon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M15.5 5.5l-7.07 7.07a3 3 0 104.24 4.24l7.07-7.07a4.5 4.5 0 00-6.36-6.36L6.8 10.85" />
+                            </svg>
+                          </span>
+                          <span class="sr-only">Thêm tệp</span>
+                        </button>
+                                    </div>
+                                    <button type="submit" id="note-submit-btn" class="note-submit-btn">
+                        Nhập ghi chú
+                      </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Manage Order Details Modal (A4) -->
+    <div id="manage-order-details-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[90vw] min-w-[1200px] modal-content">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 id="manage-order-details-title" class="text-2xl font-bold text-gray-800">Chi tiết đơn hàng sản xuất</h3>
+                            <p id="manage-order-details-subtitle" class="text-sm text-gray-500 mt-1"></p>
+                            <div id="manage-order-total" class="text-sm text-gray-700 mt-1 font-semibold">Tổng: <span id="manage-order-total-value">0</span></div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button id="generate-order-pdf-btn" class="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm">Ra Đơn Hàng</button>
+                            <button id="export-production-pdf-btn" class="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm">Thi công</button>
+                            <button id="close-manage-order-details" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-body space-y-4">
+                    <div class="flex items-center justify-between text-sm text-gray-600">
+                        <div>Trang <span id="mod-page-cur">1</span>/<span id="mod-page-total-top">1</span></div>
+                        <div class="flex items-center gap-2">
+                            <button id="mod-prev" class="px-3 py-1 border rounded bg-white hover:bg-gray-50">◀</button>
+                            <button id="mod-next" class="px-3 py-1 border rounded bg-white hover:bg-gray-50">▶</button>
+                        </div>
+                    </div>
+                    <div id="manage-order-pages" class="overflow-x-auto flex gap-4"></div>
+                    <div class="text-sm text-gray-600 text-right">Tổng trang: <span id="mod-page-total">1</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Approvals Modal -->
+    <div id="admin-approvals-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-[640px] modal-content overflow-hidden">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xl font-bold text-gray-800">Duyệt tài khoản</h3>
+                        <button id="close-admin-approvals-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                    <div class="text-sm text-gray-500">Danh sách tài khoản đang chờ duyệt</div>
+                </div>
+                <div class="modal-body">
+                    <div id="admin-approvals-list" class="space-y-2"></div>
+                    <div id="admin-approvals-empty" class="text-center text-gray-500 py-10 hidden">Không có tài khoản chờ duyệt</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Change Password Modal -->
+    <div id="admin-change-password-modal" class="hidden fixed inset-0 z-50 modal-backdrop">
+        <div class="flex items-center justify-center min-h-full p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-md modal-content overflow-hidden">
+                <div class="modal-header">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xl font-bold text-gray-800">Đổi mật khẩu</h3>
+                        <button id="close-admin-change-password-modal" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                    </div>
+                    <div class="text-sm text-gray-500">Chỉ adminqcag được phép đổi mật khẩu</div>
+                </div>
+                <div class="modal-body">
+                    <form id="admin-change-password-form" class="space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" for="admin-old-password">Mật khẩu cũ</label>
+                            <input id="admin-old-password" type="password" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" for="admin-new-password">Mật khẩu mới</label>
+                            <input id="admin-new-password" type="password" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                        </div>
+                        <div id="admin-change-password-message" class="text-sm text-red-600 hidden"></div>
+                        <div class="flex justify-end gap-2 pt-1">
+                            <button type="button" id="admin-change-password-cancel" class="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 text-gray-700">Hủy</button>
+                            <button type="submit" class="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white">Xác nhận</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script>
+        // Sự kiện mở/đóng modal thống kê
+        document.addEventListener('DOMContentLoaded', function() {
+            var btn = document.getElementById('statistic-btn');
+            var modal = document.getElementById('statistic-modal');
+            var closeBtn = document.getElementById('close-statistic-modal');
+            if (btn && modal && closeBtn) {
+                closeBtn.addEventListener('click', function() {
+                    modal.classList.add('hidden');
+                    if (typeof ensureScrollLock === 'function') {
+                        ensureScrollLock();
+                    }
+                });
+                modal.addEventListener('click', function(e) {
+                    if (e.target === modal) {
+                        modal.classList.add('hidden');
+                        if (typeof ensureScrollLock === 'function') {
+                            ensureScrollLock();
+                        }
+                    }
+                });
+            }
+        });
+    </script>
+    <script>
+        // ESC key: close only the topmost visible modal (child modal first)
+        (function() {
+            function isVisible(el) {
+                return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+            }
+
+            function closeTopmostModal() {
+                // Find visible modal-like overlays (backdrops and modals ending with -modal).
+                var candidates = Array.from(document.querySelectorAll('.modal-backdrop, [id$="-modal"]')).filter(function(el) {
+                    return el && !el.classList.contains('hidden') && isVisible(el);
+                });
+                if (!candidates.length) return;
+
+                // Prefer element with highest numeric z-index when available (preview modals set high z-index)
+                candidates.sort(function(a, b) {
+                    try {
+                        var za = parseInt(window.getComputedStyle(a).zIndex) || 0;
+                        var zb = parseInt(window.getComputedStyle(b).zIndex) || 0;
+                        if (za !== zb) return za - zb;
+                    } catch (e) {}
+                    // fallback: DOM order
+                    return 0;
+                });
+
+                var top = candidates[candidates.length - 1];
+
+                // Attempt to hide the top element directly first to avoid cases where
+                // clicking the close button only alters the button instead of closing.
+                try {
+                    top.classList.add('hidden');
+                    try {
+                        top.style.display = '';
+                    } catch (_) {}
+                } catch (e) {}
+
+                // Also hide any nested elements named *-modal inside this top element
+                try {
+                    Array.from(top.querySelectorAll('[id$="-modal"]')).forEach(function(m) {
+                        m.classList.add('hidden');
+                        try {
+                            m.style.display = '';
+                        } catch (_) {}
+                    });
+                } catch (e) {}
+
+                // Try to call a dedicated close function if one exists for this modal id
+                try {
+                    var id = top.id || '';
+                    if (id) {
+                        // Build a few candidate function names, e.g. 'quote-preview-modal' -> closeQuotePreviewModal
+                        var parts = id.split('-').filter(Boolean);
+                        var pascal = parts.map(function(p) {
+                            return p.charAt(0).toUpperCase() + p.slice(1);
+                        }).join('');
+                        var fnNames = [
+                            'close' + pascal + 'Modal', // closeQuotePreviewModal
+                            'close' + pascal, // closeQuotePreview
+                            'close' + pascal.replace(/Modal$/, '')
+                        ];
+                        for (var i = 0; i < fnNames.length; i++) {
+                            var fn = window[fnNames[i]];
+                            if (typeof fn === 'function') {
+                                try {
+                                    fn();
+                                } catch (err) {}
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) {}
+
+                // Ensure any global scroll-lock state is recalculated
+                try {
+                    if (typeof ensureScrollLock === 'function') ensureScrollLock();
+                } catch (e) {}
+            }
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' || e.key === 'Esc') {
+                    closeTopmostModal();
+                }
+            });
+        })();
+    </script>
+    <script>
+        // Auth integration (minimal, guarded)
+        (function() {
+            if (window.__qcagAuthInit) return;
+            window.__qcagAuthInit = true;
+
+            // Local-only test mode (no backend required)
+            const LOCAL_MODE = false;
+            try {
+                window.QCAG_LOCAL_MODE = LOCAL_MODE;
+            } catch (_) {}
+
+            const API_BASE = String(window.API_BASE_URL || '').replace(/\/+$/, '');
+            const STORAGE_KEY = 'qcag_auth_token';
+            const LOCAL_USER_KEY = 'qcag_local_user';
+
+            // Some browsers/settings block localStorage for file:// pages.
+            // Use an in-memory fallback so local test mode still works.
+            const __memStore = Object.create(null);
+
+            function safeGetItem(key) {
+                try {
+                    return localStorage.getItem(key);
+                } catch (_) {
+                    return Object.prototype.hasOwnProperty.call(__memStore, key) ? __memStore[key] : null;
+                }
+            }
+
+            function safeSetItem(key, value) {
+                try {
+                    localStorage.setItem(key, value);
+                } catch (_) {
+                    __memStore[key] = String(value);
+                }
+            }
+
+            function safeRemoveItem(key) {
+                try {
+                    localStorage.removeItem(key);
+                } catch (_) {
+                    delete __memStore[key];
+                }
+            }
+
+            const overlay = document.getElementById('auth-overlay');
+            const sidebar = document.getElementById('sidebar');
+            const appShell = document.getElementById('app-shell');
+            const loginForm = document.getElementById('login-form');
+            const registerForm = document.getElementById('register-form');
+            const authMsg = document.getElementById('auth-message');
+            const regMsg = document.getElementById('register-message');
+            const authSubtitle = document.getElementById('auth-subtitle');
+
+            const userMenu = document.getElementById('user-menu');
+            const userMenuBtn = document.getElementById('user-menu-btn');
+            const userMenuDropdown = document.getElementById('user-menu-dropdown');
+            const userMenuLabel = document.getElementById('user-menu-label');
+            const menuLogout = document.getElementById('menu-logout');
+            const menuChangePassword = document.getElementById('menu-change-password');
+
+            const adminApprovalsBtn = document.getElementById('admin-approvals-btn');
+            const adminApprovalsCount = document.getElementById('admin-approvals-count');
+            const adminApprovalsModal = document.getElementById('admin-approvals-modal');
+            const closeAdminApprovalsModal = document.getElementById('close-admin-approvals-modal');
+            const adminApprovalsList = document.getElementById('admin-approvals-list');
+            const adminApprovalsEmpty = document.getElementById('admin-approvals-empty');
+
+            const changePassModal = document.getElementById('admin-change-password-modal');
+            const closeChangePassModal = document.getElementById('close-admin-change-password-modal');
+            const changePassCancel = document.getElementById('admin-change-password-cancel');
+            const changePassForm = document.getElementById('admin-change-password-form');
+            const changePassMsg = document.getElementById('admin-change-password-message');
+
+            let currentUser = null;
+            let pendingPollTimer = null;
+
+            function setGlobalAuthUser(user) {
+                try {
+                    window.__qcagAuthUser = user || null;
+                } catch (_) {}
+            }
+
+            function hideApp() {
+                if (sidebar) sidebar.classList.add('hidden');
+                if (appShell) appShell.classList.add('hidden');
+            }
+
+            function showApp() {
+                if (sidebar) sidebar.classList.remove('hidden');
+                if (appShell) appShell.classList.remove('hidden');
+            }
+
+            function setMessage(el, text, isError) {
+                if (!el) return;
+                if (!text) {
+                    el.classList.add('hidden');
+                    el.textContent = '';
+                    return;
+                }
+                el.textContent = text;
+                el.classList.remove('hidden');
+                // Reset stateful classes
+                el.classList.remove('text-red-700', 'bg-red-50', 'border-red-200', 'text-green-700', 'bg-green-50', 'border-green-200');
+                if (isError) {
+                    el.classList.add('text-red-700', 'bg-red-50', 'border-red-200');
+                } else {
+                    el.classList.add('text-green-700', 'bg-green-50', 'border-green-200');
+                }
+            }
+
+            function showOverlay() {
+                overlay.classList.remove('hidden');
+                hideApp();
+                userMenu.classList.add('hidden');
+                adminApprovalsBtn.classList.add('hidden');
+                if (pendingPollTimer) {
+                    clearInterval(pendingPollTimer);
+                    pendingPollTimer = null;
+                }
+            }
+
+            function hideOverlay() {
+                overlay.classList.add('hidden');
+                showApp();
+                userMenu.classList.remove('hidden');
+            }
+
+            function getToken() {
+                return safeGetItem(STORAGE_KEY) || '';
+            }
+
+            function setToken(token) {
+                if (token) safeSetItem(STORAGE_KEY, token);
+                else safeRemoveItem(STORAGE_KEY);
+            }
+
+            function getLocalUser() {
+                try {
+                    const raw = safeGetItem(LOCAL_USER_KEY);
+                    return raw ? JSON.parse(raw) : null;
+                } catch (_) {
+                    return null;
+                }
+            }
+
+            function setLocalUser(user) {
+                try {
+                    if (user) safeSetItem(LOCAL_USER_KEY, JSON.stringify(user));
+                    else safeRemoveItem(LOCAL_USER_KEY);
+                } catch (_) {}
+            }
+
+            function getRegisteredUsers() {
+                try {
+                    const raw = safeGetItem('qcag_registered_users');
+                    return raw ? JSON.parse(raw) : [];
+                } catch (_) {
+                    return [];
+                }
+            }
+
+            function setRegisteredUsers(list) {
+                try {
+                    safeSetItem('qcag_registered_users', JSON.stringify(list || []));
+                } catch (_) {}
+            }
+
+            async function mockApi(path, opts) {
+                const method = (opts && opts.method ? String(opts.method) : 'GET').toUpperCase();
+                let body = {};
+                try {
+                    body = opts && opts.body ? JSON.parse(opts.body) : {};
+                } catch (_) {
+                    body = {};
+                }
+
+                if (path === '/auth/login' && method === 'POST') {
+                    const username = (body.username || body.phone || '').trim();
+                    if (!username) throw {
+                        error: 'invalid_username'
+                    };
+
+                    // admin user bypasses registration/approval
+                    if (username === 'adminqcag') {
+                        const user = {
+                            username,
+                            role: 'admin',
+                            name: username
+                        };
+                        setLocalUser(user);
+                        return {
+                            token: 'local-' + username,
+                            user
+                        };
+                    }
+
+                    const users = getRegisteredUsers();
+                    const found = users.find(u => u.username === username);
+                    if (!found) throw {
+                        error: 'invalid_credentials'
+                    };
+                    if (!found.approved) throw {
+                        error: 'pending_approval'
+                    };
+
+                    const user = {
+                        username,
+                        role: found.role || 'user',
+                        name: found.name || username
+                    };
+                    setLocalUser(user);
+                    return {
+                        token: 'local-' + username,
+                        user
+                    };
+                }
+
+                if (path === '/auth/me' && method === 'GET') {
+                    const user = getLocalUser();
+                    if (!user) throw {
+                        error: 'unauthorized'
+                    };
+                    return {
+                        user
+                    };
+                }
+
+                if (path === '/auth/logout' && method === 'POST') {
+                    setLocalUser(null);
+                    return {
+                        ok: true
+                    };
+                }
+
+                if (path === '/auth/register' && method === 'POST') {
+                    const username = (body.username || body.phone || '').trim();
+                    const name = (body.name || '').trim();
+                    // Basic validations that match UI expectations
+                    if (!username) throw {
+                        error: 'invalid_phone'
+                    };
+                    if (!name) throw {
+                        error: 'missing_name'
+                    };
+                    const users = getRegisteredUsers();
+                    const found = users.find(u => u.username === username);
+                    if (found) {
+                        if (found.approved) throw {
+                            error: 'already_exists'
+                        };
+                        else throw {
+                            error: 'already_pending'
+                        };
+                    }
+                    users.push({
+                        username,
+                        name,
+                        role: 'user',
+                        approved: false,
+                        createdAt: Date.now()
+                    });
+                    setRegisteredUsers(users);
+                    return {
+                        ok: true
+                    };
+                }
+
+                if (path === '/auth/admin/pending' && method === 'GET') {
+                    const pending = getRegisteredUsers().filter(u => !u.approved);
+                    return {
+                        pending
+                    };
+                }
+
+                if (path === '/auth/admin/approve' && method === 'POST') {
+                    const username = (body.username || body.phone || '').trim();
+                    if (!username) throw {
+                        error: 'invalid_username'
+                    };
+                    const users = getRegisteredUsers();
+                    const idx = users.findIndex(u => u.username === username);
+                    if (idx === -1) throw {
+                        error: 'not_found'
+                    };
+                    users[idx].approved = true;
+                    setRegisteredUsers(users);
+                    return {
+                        ok: true
+                    };
+                }
+
+                if (path === '/auth/admin/users' && method === 'GET') {
+                    // return all registered users
+                    const users = getRegisteredUsers();
+                    return {
+                        users
+                    };
+                }
+
+                if (path === '/auth/admin/delete' && method === 'POST') {
+                    const username = (body.username || body.phone || '').trim();
+                    if (!username) throw {
+                        error: 'invalid_username'
+                    };
+                    let users = getRegisteredUsers();
+                    users = users.filter(u => u.username !== username);
+                    setRegisteredUsers(users);
+                    return {
+                        ok: true
+                    };
+                }
+
+                if (path === '/auth/admin/update' && method === 'POST') {
+                    const username = (body.username || body.phone || '').trim();
+                    const name = (body.name || '').trim();
+                    if (!username) throw {
+                        error: 'invalid_username'
+                    };
+                    if (!name) throw {
+                        error: 'missing_name'
+                    };
+                    const users = getRegisteredUsers();
+                    const idx = users.findIndex(u => u.username === username);
+                    if (idx === -1) throw {
+                        error: 'not_found'
+                    };
+                    users[idx].name = name;
+                    setRegisteredUsers(users);
+                    return {
+                        ok: true
+                    };
+                }
+
+                if (path === '/auth/admin/change-password' && method === 'POST') {
+                    return {
+                        ok: true
+                    };
+                }
+
+                throw {
+                    error: 'local_mode',
+                    message: 'LOCAL_MODE: endpoint not available',
+                    path
+                };
+            }
+
+            async function api(path, opts) {
+                if (LOCAL_MODE) return mockApi(path, opts);
+                const token = getToken();
+                const headers = Object.assign({
+                    'Content-Type': 'application/json'
+                }, (opts && opts.headers) || {});
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+                const res = await fetch(API_BASE + path, Object.assign({}, opts || {}, {
+                    headers
+                }));
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw data;
+                return data;
+            }
+
+            function isAdminQcag() {
+                return currentUser && currentUser.username === 'adminqcag' && currentUser.role === 'admin';
+            }
+
+            function updateUserMenuUI() {
+                if (!currentUser) {
+                    userMenuLabel.textContent = 'Tài khoản';
+                    menuChangePassword.classList.add('hidden');
+                    try {
+                        document.getElementById('manage-accounts-btn').classList.add('hidden');
+                    } catch (e) {}
+                    setGlobalAuthUser(null);
+                    return;
+                }
+                userMenuLabel.textContent = (currentUser.name && currentUser.name.trim()) ? currentUser.name : currentUser.username;
+                setGlobalAuthUser(currentUser);
+                if (isAdminQcag()) {
+                    menuChangePassword.classList.remove('hidden');
+                    try {
+                        document.getElementById('manage-accounts-btn').classList.remove('hidden');
+                    } catch (e) {}
+                } else {
+                    menuChangePassword.classList.add('hidden');
+                    try {
+                        document.getElementById('manage-accounts-btn').classList.add('hidden');
+                    } catch (e) {}
+                }
+            }
+
+            async function refreshMe() {
+                if (LOCAL_MODE) {
+                    const user = getLocalUser();
+                    if (!user) {
+                        currentUser = null;
+                        showOverlay();
+                        return;
+                    }
+                    currentUser = user;
+                    updateUserMenuUI();
+                    hideOverlay();
+                    return;
+                }
+                const token = getToken();
+                if (!token) {
+                    currentUser = null;
+                    showOverlay();
+                    return;
+                }
+                try {
+                    const me = await api('/auth/me', {
+                        method: 'GET'
+                    });
+                    currentUser = me && me.user ? me.user : null;
+                    updateUserMenuUI();
+                    hideOverlay();
+                    if (isAdminQcag()) {
+                        startPendingPoll();
+                        try {
+                            await fetchAllUsersAndRender();
+                        } catch (_) { /* ignore fetch errors */ }
+                    }
+                } catch (e) {
+                    currentUser = null;
+                    setGlobalAuthUser(null);
+                    setToken('');
+                    showOverlay();
+                }
+            }
+
+            function openRegister() {
+                loginForm.classList.add('hidden');
+                registerForm.classList.remove('hidden');
+                authSubtitle.textContent = 'Đăng ký tài khoản (admin duyệt)';
+                setMessage(authMsg, '', true);
+                setMessage(regMsg, '', true);
+            }
+
+            function openLogin() {
+                registerForm.classList.add('hidden');
+                loginForm.classList.remove('hidden');
+                authSubtitle.textContent = 'Vui lòng đăng nhập để sử dụng';
+                setMessage(authMsg, '', true);
+                setMessage(regMsg, '', true);
+            }
+
+            function toggleDropdown(force) {
+                const wantOpen = (typeof force === 'boolean') ? force : userMenuDropdown.classList.contains('hidden');
+                userMenuDropdown.classList.toggle('hidden', !wantOpen);
+            }
+
+            async function fetchPending() {
+                if (!isAdminQcag()) return;
+                try {
+                    const data = await api('/auth/admin/pending', {
+                        method: 'GET'
+                    });
+                    const pending = (data && data.pending) ? data.pending : [];
+                    const count = pending.length;
+                    adminApprovalsCount.textContent = String(count);
+                    if (count > 0) adminApprovalsBtn.classList.remove('hidden');
+                    else adminApprovalsBtn.classList.add('hidden');
+
+                    // Render list if modal open
+                    if (!adminApprovalsModal.classList.contains('hidden')) {
+                        renderPendingList(pending);
+                    }
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            function startPendingPoll() {
+                fetchPending();
+                if (pendingPollTimer) clearInterval(pendingPollTimer);
+                pendingPollTimer = setInterval(fetchPending, 15000);
+            }
+
+            function renderPendingList(pending) {
+                adminApprovalsList.innerHTML = '';
+                if (!pending || pending.length === 0) {
+                    adminApprovalsEmpty.classList.remove('hidden');
+                    return;
+                }
+                adminApprovalsEmpty.classList.add('hidden');
+
+                pending.forEach(u => {
+                    const row = document.createElement('div');
+                    row.className = 'flex items-center justify-between gap-3 p-3 border border-gray-200 rounded';
+                    const left = document.createElement('div');
+                    left.className = 'min-w-0';
+                    left.innerHTML = `<div class="font-semibold text-gray-800">${(u.name || '').replace(/</g,'&lt;')}</div><div class="text-sm text-gray-500">${(u.username || '').replace(/</g,'&lt;')}</div>`;
+                    const btn = document.createElement('button');
+                    btn.className = 'bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded';
+                    btn.textContent = 'Duyệt';
+                    btn.addEventListener('click', async(e) => {
+                        e.stopPropagation();
+                        btn.disabled = true;
+                        btn.classList.add('opacity-50');
+                        try {
+                            await api('/auth/admin/approve', {
+                                method: 'POST',
+                                body: JSON.stringify({
+                                    phone: u.username
+                                })
+                            });
+                            await fetchPending();
+                            // Refresh modal list
+                            const data = await api('/auth/admin/pending', {
+                                method: 'GET'
+                            });
+                            renderPendingList(data.pending || []);
+                        } catch (err) {
+                            btn.disabled = false;
+                            btn.classList.remove('opacity-50');
+                        }
+                    });
+                    row.appendChild(left);
+                    row.appendChild(btn);
+                    adminApprovalsList.appendChild(row);
+                });
+            }
+
+            // UI bindings
+            document.getElementById('open-register').addEventListener('click', openRegister);
+            document.getElementById('back-to-login').addEventListener('click', openLogin);
+
+            loginForm.addEventListener('submit', async(e) => {
+                e.preventDefault();
+                setMessage(authMsg, '', true);
+                const username = document.getElementById('login-username').value.trim();
+                const password = document.getElementById('login-password').value;
+                try {
+                    const data = await api('/auth/login', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            username,
+                            password
+                        })
+                    });
+                    setToken(data.token);
+                    currentUser = data.user;
+                    setGlobalAuthUser(currentUser);
+                    updateUserMenuUI();
+                    hideOverlay();
+                    if (isAdminQcag()) {
+                        startPendingPoll();
+                        try {
+                            await fetchAllUsersAndRender();
+                        } catch (_) { /* ignore fetch errors */ }
+                    }
+                } catch (err) {
+                    const isNetwork = !LOCAL_MODE && !(err && typeof err === 'object' && ('error' in err));
+                    const code = err && err.error ? err.error : 'login_failed';
+                    let msg = isNetwork ? 'Không thể kết nối. Đang chạy chế độ local (không dùng backend).' : 'Đăng nhập thất bại';
+                    if (code === 'pending_approval') msg = 'Tài khoản đang chờ admin duyệt';
+                    if (code === 'invalid_credentials') msg = 'Sai tài khoản hoặc mật khẩu';
+                    if (code === 'invalid_username') msg = 'Tài khoản phải là SĐT 10 số (hoặc adminqcag)';
+                    setMessage(authMsg, msg, true);
+                }
+            });
+
+            registerForm.addEventListener('submit', async(e) => {
+                e.preventDefault();
+                setMessage(regMsg, '', true);
+                const phone = document.getElementById('register-phone').value.trim();
+                const name = document.getElementById('register-name').value.trim();
+                try {
+                    await api('/auth/register', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            phone,
+                            name
+                        })
+                    });
+                    setMessage(regMsg, 'Đã gửi đăng ký, chờ admin duyệt', false);
+                } catch (err) {
+                    const isNetwork = !LOCAL_MODE && !(err && typeof err === 'object' && ('error' in err));
+                    const code = err && err.error ? err.error : 'register_failed';
+                    let msg = isNetwork ? 'Không thể kết nối. Đang chạy chế độ local (không dùng backend).' : 'Đăng ký thất bại';
+                    if (code === 'invalid_phone') msg = 'SĐT phải đủ 10 số';
+                    if (code === 'missing_name') msg = 'Vui lòng nhập tên';
+                    if (code === 'already_exists') msg = 'Tài khoản đã tồn tại';
+                    if (code === 'already_pending') msg = 'Tài khoản đang chờ duyệt';
+                    setMessage(regMsg, msg, true);
+                }
+            });
+
+            userMenuBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleDropdown();
+            });
+
+            document.addEventListener('click', () => toggleDropdown(false));
+
+            menuLogout.addEventListener('click', async(e) => {
+                e.preventDefault();
+                toggleDropdown(false);
+                try {
+                    await api('/auth/logout', {
+                        method: 'POST'
+                    });
+                } catch {}
+                setToken('');
+                currentUser = null;
+                setGlobalAuthUser(null);
+                showOverlay();
+            });
+
+            menuChangePassword.addEventListener('click', (e) => {
+                e.preventDefault();
+                toggleDropdown(false);
+                if (!isAdminQcag()) return;
+                setMessage(changePassMsg, '', true);
+                document.getElementById('admin-old-password').value = '';
+                document.getElementById('admin-new-password').value = '';
+                changePassModal.classList.remove('hidden');
+            });
+
+            function closeApprovalsModal() {
+                adminApprovalsModal.classList.add('hidden');
+            }
+            adminApprovalsBtn.addEventListener('click', async(e) => {
+                e.preventDefault();
+                adminApprovalsModal.classList.remove('hidden');
+                try {
+                    const data = await api('/auth/admin/pending', {
+                        method: 'GET'
+                    });
+                    renderPendingList(data.pending || []);
+                } catch {
+                    renderPendingList([]);
+                }
+            });
+            closeAdminApprovalsModal.addEventListener('click', closeApprovalsModal);
+            adminApprovalsModal.addEventListener('click', (e) => {
+                if (e.target === adminApprovalsModal) closeApprovalsModal();
+            });
+
+            // Manage Accounts - admin-only
+            const manageAccountsBtn = document.getElementById('manage-accounts-btn');
+            const manageAccountsModal = document.getElementById('manage-accounts-modal');
+            const closeManageAccountsModal = document.getElementById('close-manage-accounts-modal');
+            const manageAccountsTbody = document.getElementById('manage-accounts-tbody');
+
+            function closeManageAccounts() {
+                if (manageAccountsModal) manageAccountsModal.classList.add('hidden');
+            }
+
+            async function fetchAllUsersAndRender() {
+                try {
+                    const data = await api('/auth/admin/users', {
+                        method: 'GET'
+                    });
+                    const users = data && data.users ? data.users : [];
+                    // Sync to localStorage so other modules (ví dụ cột người liên hệ) có thể tra cứu tên hiển thị
+                    try {
+                        setRegisteredUsers(users);
+                    } catch (e) { /* ignore localStorage issues */ }
+                    renderAccountsTable(users);
+                } catch (e) {
+                    renderAccountsTable([]);
+                }
+            }
+
+            function renderAccountsTable(users) {
+                if (!manageAccountsTbody) return;
+                manageAccountsTbody.innerHTML = '';
+                users.forEach((u, idx) => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'border-b';
+                    const tdIndex = document.createElement('td');
+                    tdIndex.className = 'p-2';
+                    tdIndex.textContent = String(idx + 1);
+                    const tdName = document.createElement('td');
+                    tdName.className = 'p-2';
+                    const nameInput = document.createElement('input');
+                    nameInput.type = 'text';
+                    nameInput.value = u.name || '';
+                    nameInput.dataset.username = u.username;
+                    nameInput.className = 'w-full px-2 py-1 border rounded';
+                    nameInput.addEventListener('keydown', async(ev) => {
+                        if (ev.key === 'Enter') {
+                            ev.preventDefault();
+                            const newName = nameInput.value.trim();
+                            try {
+                                await api('/auth/admin/update', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        username: u.username,
+                                        name: newName
+                                    })
+                                });
+                                nameInput.classList.remove('border-red-300');
+                            } catch (err) {
+                                nameInput.classList.add('border-red-300');
+                            }
+                        }
+                    });
+                    tdName.appendChild(nameInput);
+
+                    const tdAccount = document.createElement('td');
+                    tdAccount.className = 'p-2';
+                    tdAccount.textContent = (u.name && u.name.trim()) ? u.name : (u.username || '');
+                    const tdStatus = document.createElement('td');
+                    tdStatus.className = 'p-2';
+                    tdStatus.textContent = u.approved ? 'Đang hoạt động' : 'Chờ duyệt';
+                    const tdAction = document.createElement('td');
+                    tdAction.className = 'p-2';
+                    const btn = document.createElement('button');
+                    btn.className = 'px-3 py-1 rounded text-sm';
+                    if (!u.approved) {
+                        btn.textContent = 'Duyệt';
+                        btn.classList.add('bg-green-600', 'text-white');
+                        btn.addEventListener('click', async() => {
+                            btn.disabled = true;
+                            try {
+                                await api('/auth/admin/approve', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        username: u.username
+                                    })
+                                });
+                                await fetchAllUsersAndRender();
+                            } catch (_) {
+                                btn.disabled = false;
+                            }
+                        });
+                    } else {
+                        btn.textContent = 'Xoá';
+                        btn.classList.add('bg-red-600', 'text-white');
+                        btn.addEventListener('click', async() => {
+                            if (!confirm('Xoá user ' + u.username + '?')) return;
+                            btn.disabled = true;
+                            try {
+                                await api('/auth/admin/delete', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        username: u.username
+                                    })
+                                });
+                                await fetchAllUsersAndRender();
+                            } catch (_) {
+                                btn.disabled = false;
+                            }
+                        });
+                    }
+                    tdAction.appendChild(btn);
+
+                    tr.appendChild(tdIndex);
+                    tr.appendChild(tdName);
+                    tr.appendChild(tdAccount);
+                    tr.appendChild(tdStatus);
+                    tr.appendChild(tdAction);
+                    manageAccountsTbody.appendChild(tr);
+                });
+            }
+
+            if (manageAccountsBtn) manageAccountsBtn.addEventListener('click', async(e) => {
+                e.preventDefault();
+                if (manageAccountsModal) manageAccountsModal.classList.remove('hidden');
+                await fetchAllUsersAndRender();
+            });
+            if (closeManageAccountsModal) closeManageAccountsModal.addEventListener('click', closeManageAccounts);
+            if (manageAccountsModal) manageAccountsModal.addEventListener('click', (e) => {
+                if (e.target === manageAccountsModal) closeManageAccounts();
+            });
+
+            function closeChangePass() {
+                changePassModal.classList.add('hidden');
+            }
+            closeChangePassModal.addEventListener('click', closeChangePass);
+            changePassCancel.addEventListener('click', closeChangePass);
+            changePassModal.addEventListener('click', (e) => {
+                if (e.target === changePassModal) closeChangePass();
+            });
+
+            changePassForm.addEventListener('submit', async(e) => {
+                e.preventDefault();
+                if (!isAdminQcag()) return;
+                setMessage(changePassMsg, '', true);
+                const old_password = document.getElementById('admin-old-password').value;
+                const new_password = document.getElementById('admin-new-password').value;
+                try {
+                    await api('/auth/admin/change-password', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            old_password,
+                            new_password
+                        })
+                    });
+                    setMessage(changePassMsg, 'Đổi mật khẩu thành công', false);
+                    setTimeout(() => closeChangePass(), 700);
+                } catch (err) {
+                    const code = err && err.error ? err.error : 'change_password_failed';
+                    let msg = 'Đổi mật khẩu thất bại';
+                    if (code === 'invalid_credentials') msg = 'Mật khẩu cũ không đúng';
+                    setMessage(changePassMsg, msg, true);
+                }
+            });
+
+            // Initial
+            openLogin();
+            showOverlay();
+            refreshMe();
+        })();
+    </script>
+    <script>
+        (function() {
+            function enhanceCloseButton(btn) {
+                if (!btn) return;
+                try {
+                    btn.setAttribute('type', 'button');
+                } catch (e) {}
+                if (!btn.getAttribute('aria-label')) btn.setAttribute('aria-label', 'Đóng');
+                btn.classList.add('modal-close-hit');
+                if (btn.dataset && btn.dataset.closeEnhanced) return;
+                btn.dataset.closeEnhanced = '1';
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    // find nearest modal backdrop or ancestor with id ending -modal
+                    var p = btn.parentElement;
+                    while (p) {
+                        if (p.classList && p.classList.contains && p.classList.contains('modal-backdrop')) {
+                            closeModalFallback(p);
+                            return;
+                        }
+                        if (p.id && /-modal$/.test(p.id)) {
+                            closeModalFallback(p);
+                            return;
+                        }
+                        p = p.parentElement;
+                    }
+                    // fallback: try to close topmost
+                    closeTopmostViaScriptFallback();
+                });
+            }
+
+            function tryCallDedicatedClose(modal) {
+                try {
+                    var id = modal.id || '';
+                    if (!id) return false;
+                    var parts = id.split('-').filter(Boolean);
+                    var pascal = parts.map(function(p) {
+                        return p.charAt(0).toUpperCase() + p.slice(1);
+                    }).join('');
+                    var fnNames = ['close' + pascal + 'Modal', 'close' + pascal, 'close' + pascal.replace(/Modal$/, '')];
+                    for (var i = 0; i < fnNames.length; i++) {
+                        var fn = window[fnNames[i]];
+                        if (typeof fn === 'function') {
+                            try {
+                                fn();
+                            } catch (e) {}
+                            return true;
+                        }
+                    }
+                } catch (e) {}
+                return false;
+            }
+
+            function closeModalFallback(modal) {
+                if (!modal) return;
+                if (!tryCallDedicatedClose(modal)) {
+                    modal.classList.add('hidden');
+                    try {
+                        if (typeof ensureScrollLock === 'function') ensureScrollLock();
+                    } catch (e) {}
+                }
+            }
+
+            function createCloseButton(modal) {
+                var content = modal.querySelector('.modal-content') || modal;
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'modal-close-hit';
+                btn.setAttribute('aria-label', 'Đóng');
+                btn.innerText = '×';
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    closeModalFallback(modal);
+                });
+                btn.style.position = 'absolute';
+                btn.style.top = '12px';
+                btn.style.right = '12px';
+                btn.style.zIndex = '60';
+                // ensure content is positioned so absolute works
+                try {
+                    if (getComputedStyle(content).position === 'static') content.style.position = 'relative';
+                } catch (e) {}
+                content.appendChild(btn);
+                return btn;
+            }
+
+            function ensureForModal(modal) {
+                if (!modal) return;
+                var candidates = modal.querySelectorAll('button[id^="close-"], button[aria-label="Đóng"], button[class*="close"]');
+                if (candidates && candidates.length) {
+                    candidates.forEach(enhanceCloseButton);
+                    return;
+                }
+                // if none found, add one
+                createCloseButton(modal);
+            }
+
+            function observeModal(modal) {
+                ensureForModal(modal);
+                var mo = new MutationObserver(function(muts) {
+                    muts.forEach(function(m) {
+                        if (m.type === 'attributes' && m.attributeName === 'class') {
+                            if (!modal.classList.contains('hidden')) ensureForModal(modal);
+                        }
+                        if (m.type === 'childList') {
+                            // content replaced/changed — ensure a close button exists
+                            ensureForModal(modal);
+                        }
+                    });
+                });
+                try {
+                    mo.observe(modal, {
+                        attributes: true,
+                        attributeFilter: ['class'],
+                        childList: true,
+                        subtree: false
+                    });
+                } catch (e) {}
+            }
+
+            function closeTopmostViaScriptFallback() {
+                try {
+                    var cands = Array.from(document.querySelectorAll('.modal-backdrop, [id$="-modal"]')).filter(function(el) {
+                        return el && !el.classList.contains('hidden');
+                    });
+                    if (cands.length) closeModalFallback(cands[cands.length - 1]);
+                } catch (e) {}
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                var style = document.createElement('style');
+                style.innerHTML = '.modal-close-hit{padding:6px; width:44px; height:44px; display:flex; align-items:center; justify-content:center; border-radius:8px; font-size:22px; background:transparent; border:none; color:#374151;} .modal-close-hit:hover{background:rgba(0,0,0,0.04)} .modal-close-hit:focus{outline:2px solid rgba(59,130,246,0.35)}';
+                document.head.appendChild(style);
+
+                Array.from(document.querySelectorAll('.modal-backdrop')).forEach(function(modal) {
+                    observeModal(modal);
+                });
+
+                // watch for dynamically added modals
+                var bodyMo = new MutationObserver(function(muts) {
+                    muts.forEach(function(m) {
+                        Array.from(m.addedNodes || []).forEach(function(node) {
+                            if (node && node.classList && node.classList.contains && node.classList.contains('modal-backdrop')) {
+                                observeModal(node);
+                            }
+                        });
+                    });
+                });
+                bodyMo.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            });
+        })();
+    </script>
+
+    <div id="image-viewer" class="image-viewer-overlay hidden" aria-hidden="true">
+        <div class="image-viewer-top-bar">
+            <div id="image-viewer-filename" class="image-viewer-filename"></div>
+            <div class="image-viewer-actions">
+                <button type="button" id="image-viewer-zoom-out" class="image-viewer-btn" aria-label="Thu nhỏ">-</button>
+                <button type="button" id="image-viewer-zoom-reset" class="image-viewer-btn" aria-label="Về 100%">100%</button>
+                <button type="button" id="image-viewer-zoom-in" class="image-viewer-btn" aria-label="Phóng to">+</button>
+                <button type="button" id="image-viewer-fullscreen" class="image-viewer-btn" aria-label="Toàn màn hình">Full</button>
+                <button type="button" id="image-viewer-close" class="image-viewer-btn" aria-label="Đóng">Đóng</button>
+            </div>
+        </div>
+        <div class="image-viewer-content">
+            <div id="image-viewer-stage" class="image-viewer-stage">
+                <img id="image-viewer-img" src="" alt="Xem hình" />
+            </div>
+        </div>
+    </div>
+
+    <script src="./ui/loading/loading-overlay.js" defer></script>
+    <script src="./js/xinphep.js" defer></script>
+    <script src="./js/bangtinh.js" defer></script>
+    <script src="./js/dssale.js" defer></script>
+    <script src="./_deploy/js/app.js?v=1.8.2" defer></script>
+    <script src="./_deploy/js/statistics.js?v=1.8.2" defer></script>
+    <script src="./js/create_quote_modal.js" defer></script>
+</body>
+
+</html>
