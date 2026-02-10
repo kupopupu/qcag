@@ -12,7 +12,6 @@
   ];
 
   const basePath = (() => {
-<<<<<<< codex/review-my-system-documentation-vw29zo
     if (typeof window !== 'undefined' && window.QCAG_SCRIPT_BASE) {
       const customBase = String(window.QCAG_SCRIPT_BASE);
       return customBase.endsWith('/') ? customBase : `${customBase}/`;
@@ -34,11 +33,6 @@
     }
 
     return './_deploy/js/';
-=======
-    const current = document.currentScript && document.currentScript.src;
-    if (!current) return '';
-    return current.substring(0, current.lastIndexOf('/') + 1);
->>>>>>> main
   })();
 
   const loadScript = (src) => new Promise((resolve, reject) => {

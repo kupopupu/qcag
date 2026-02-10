@@ -3838,10 +3838,15 @@
     }
 
     // Initialize
-    initializeApp();
-    setupSearch();
-    setupQcSignageModalHandlers();
-    setupExcelImportHandlers();
+    function bootApp() {
+      initializeApp();
+      setupSearch();
+      setupQcSignageModalHandlers();
+      setupExcelImportHandlers();
+      setupSidebar();
+      setupViewToggle();
+    }
+
     // Restore sidebar event bindings (was removed in corruption)
     function setupSidebar() {
       const createBtn = document.getElementById('create-quote-btn');
@@ -4367,7 +4372,6 @@
         });
       }
     }
-    setupSidebar();
     // View mode toggle handlers
     function setupViewToggle() {
       const listBtn = document.getElementById('view-list-btn');
@@ -4388,7 +4392,11 @@
       outletBtn.addEventListener('click', () => { if (viewMode !== 'outlet') { viewMode = 'outlet'; outletPage = 1; setActive(); updateMainList(); } });
       setActive();
     }
-    setupViewToggle();
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bootApp);
+    } else {
+      bootApp();
+    }
     
     // Test Quote Seeder removed
 
